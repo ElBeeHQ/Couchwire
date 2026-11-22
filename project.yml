@@ -1,0 +1,56 @@
+# Generate the Xcode project with: xcodegen generate
+name: PSStream
+options:
+  bundleIdPrefix: com.psstream
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ARCHS: arm64
+
+targets:
+  PSStream:
+    type: application
+    platform: macOS
+    sources:
+      - path: PSStream
+    preBuildScripts:
+      - name: Build libchiaki
+        script: |
+          if [ ! -f "${PROJECT_DIR}/build/chiaki/out/libchiaki_all.a" ]; then
+            "${PROJECT_DIR}/scripts/build-chiaki.sh"
+          fi
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.psstream.PSStream
+        PRODUCT_NAME: PSStream
+        INFOPLIST_FILE: PSStream/Info.plist
+        CODE_SIGN_ENTITLEMENTS: PSStream/PSStream.entitlements
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: NO
+        SWIFT_OBJC_BRIDGING_HEADER: PSStream/Core/PSStream-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/Vendor/chiaki-ng/lib/include
+          - $(PROJECT_DIR)/build/chiaki/lib/include
+        LIBRARY_SEARCH_PATHS:
+          - $(PROJECT_DIR)/build/chiaki/out
+          - /opt/homebrew/lib
+          - /opt/homebrew/opt/openssl/lib
+          - /opt/homebrew/opt/curl/lib
+        OTHER_LDFLAGS:
+          - -lchiaki_all
+          - -lcrypto
+          - -lopus
+          - -ljson-c
+          - -lminiupnpc
+          - -levent
+          - -lcurl
+          - -framework CoreServices
+        GCC_OPTIMIZATION_LEVEL: "3"
+        SWIFT_OPTIMIZATION_LEVEL: -O
