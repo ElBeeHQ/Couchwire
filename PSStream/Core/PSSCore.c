@@ -469,6 +469,20 @@ int pss_session_go_to_bed(PSSSession *s)
 	return (int)chiaki_session_goto_bed(&s->session);
 }
 
+void pss_session_get_stats(PSSSession *s, PSSNetworkStats *out)
+{
+	memset(out, 0, sizeof(*out));
+	if(!s)
+		return;
+	// Unlocked reads of plain scalars for display only; a stale value is fine.
+	ChiakiSession *cs = &s->session;
+	out->rtt_ms = (double)cs->rtt_us / 1000.0;
+	out->mtu_in = cs->mtu_in;
+	ChiakiStreamConnection *sc = &cs->stream_connection;
+	out->packet_loss = sc->congestion_control.packet_loss;
+	out->measured_bitrate_mbps = sc->measured_bitrate;
+}
+
 PSSControllerState pss_controller_idle(void)
 {
 	ChiakiControllerState st;

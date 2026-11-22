@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct PSStreamApp: App {
 	@State private var model = AppModel()
+	@AppStorage("showStats") private var showStats = false
 
 	var body: some Scene {
 		Window("PSStream", id: "main") {
@@ -20,6 +21,10 @@ struct PSStreamApp: App {
 		.windowStyle(.hiddenTitleBar)
 		.defaultSize(width: 1280, height: 720)
 		.commands {
+			CommandGroup(after: .toolbar) {
+				Toggle("Show Performance Stats", isOn: $showStats)
+					.keyboardShortcut("i", modifiers: [.command, .option])
+			}
 			CommandGroup(after: .windowArrangement) {
 				Button("End Session") { model.endSession() }
 					.keyboardShortcut("w", modifiers: [.command, .shift])

@@ -17,23 +17,31 @@ final class StreamSession {
 	}
 
 	private(set) var phase: Phase = .connecting
+	/// Refreshed twice a second while streaming, for the performance overlay.
+	private(set) var stats = StreamStats.Snapshot()
 	let console: RegisteredConsole
 	let displayLayer = AVSampleBufferDisplayLayer()
+	/// Fed by the stream view's display link so we can measure time-to-refresh.
+	let statsCollector: StreamStats
 
 	@ObservationIgnored private nonisolated(unsafe) var handle: OpaquePointer?
 	@ObservationIgnored private let media: MediaSink
 	@ObservationIgnored private var input: ControllerInput?
 	@ObservationIgnored private var activity: NSObjectProtocol?
 	@ObservationIgnored private var box: Unmanaged<MediaSink>?
+	@ObservationIgnored private var statsTimer: Timer?
 
 	init(console: RegisteredConsole, keys: ConsoleKeys, settings: StreamSettings) {
 		self.console = console
 		displayLayer.videoGravity = .resizeAspect
 		displayLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
 		// No control timebase: samples are flagged DisplayImmediately and shown on decode.
+		let collector = StreamStats(codec: settings.codec.rawValue)
+		statsCollector = collector
 		media = MediaSink(
 			decoder: VideoDecoder(codec: settings.codec == .hevc ? .hevc : .h264,
-								  renderer: displayLayer.sampleBufferRenderer))
+								  renderer: displayLayer.sampleBufferRenderer, stats: collector),
+			stats: collector)
 		media.owner = self
 
 		var cfg = PSSSessionConfig()
@@ -61,6 +69,7 @@ final class StreamSession {
 		callbacks.log = { level, msg, _ in logFromCore(level, msg) }
 		callbacks.video = { buf, size, framesLost, _, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			sink.stats.frameArrived(bytes: size, framesLost: framesLost)
 			if framesLost > 0 { sink.requestKeyframe() }
 			return sink.decoder.decode(UnsafeBufferPointer(start: buf, count: size))
 		}
@@ -133,6 +142,7 @@ final class StreamSession {
 
 	private func didConnect() {
 		phase = .streaming
+		startStatsTimer()
 		guard let handle else { return }
 		let h = handle
 		let input = ControllerInput { state in
@@ -149,7 +159,28 @@ final class StreamSession {
 		teardown()
 	}
 
+	private func startStatsTimer() {
+		statsTimer?.invalidate()
+		let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+			MainActor.assumeIsolated { self?.refreshStats() }
+		}
+		RunLoop.main.add(timer, forMode: .common)
+		statsTimer = timer
+	}
+
+	private func refreshStats() {
+		guard let handle, phase == .streaming else { return }
+		var snapshot = statsCollector.snapshot()
+		var net = PSSNetworkStats()
+		pss_session_get_stats(handle, &net)
+		snapshot.rttMs = net.rtt_ms
+		snapshot.packetLoss = net.packet_loss
+		stats = snapshot
+	}
+
 	private func teardown() {
+		statsTimer?.invalidate()
+		statsTimer = nil
 		input?.stop()
 		input = nil
 		media.rumble = nil
@@ -177,7 +208,10 @@ final class MediaSink: @unchecked Sendable {
 	var rumble: ((UInt8, UInt8) -> Void)?
 	weak var owner: StreamSession?
 
-	init(decoder: VideoDecoder) {
+	let stats: StreamStats
+
+	init(decoder: VideoDecoder, stats: StreamStats) {
 		self.decoder = decoder
+		self.stats = stats
 	}
 }

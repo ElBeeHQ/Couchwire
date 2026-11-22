@@ -4,13 +4,19 @@ import SwiftUI
 struct StreamWindowView: View {
 	@Environment(AppModel.self) private var model
 	@Environment(\.dismissWindow) private var dismissWindow
+	@AppStorage("showStats") private var showStats = false
 
 	var body: some View {
 		ZStack {
 			Color.black
 			if let session = model.session {
-				VideoLayerView(layer: session.displayLayer)
+				VideoLayerView(layer: session.displayLayer, stats: session.statsCollector)
 				overlay(for: session)
+				if showStats, session.phase == .streaming {
+					StatsOverlay(stats: session.stats)
+						.padding(16)
+						.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+				}
 			} else {
 				Text("No active session").foregroundStyle(.secondary)
 			}
@@ -84,9 +90,11 @@ private struct PINPrompt: View {
 /// go from the hardware decoder to the compositor without passing through SwiftUI.
 struct VideoLayerView: NSViewRepresentable {
 	let layer: AVSampleBufferDisplayLayer
+	let stats: StreamStats
 
 	func makeNSView(context: Context) -> NSView {
 		let view = LayerHostView()
+		view.stats = stats
 		view.wantsLayer = true
 		view.layer = CALayer()
 		view.layer?.backgroundColor = .black
@@ -99,6 +107,9 @@ struct VideoLayerView: NSViewRepresentable {
 	func updateNSView(_ nsView: NSView, context: Context) {}
 
 	final class LayerHostView: NSView {
+		var stats: StreamStats?
+		private var displayLink: CADisplayLink?
+
 		override var isOpaque: Bool { true }
 		override var acceptsFirstResponder: Bool { true }
 		// Swallow key events so typing doesn't beep; keys reach the console via GCKeyboard.
@@ -108,6 +119,18 @@ struct VideoLayerView: NSViewRepresentable {
 		override func viewDidMoveToWindow() {
 			super.viewDidMoveToWindow()
 			window?.makeFirstResponder(self)
+			displayLink?.invalidate()
+			displayLink = nil
+			guard window != nil else { return }
+			// Tracks the refresh cadence of whichever display the window is on, so we can
+			// tell how long each decoded frame waits for the next refresh.
+			let link = displayLink(target: self, selector: #selector(tick(_:)))
+			link.add(to: .main, forMode: .common)
+			displayLink = link
+		}
+
+		@objc private func tick(_ link: CADisplayLink) {
+			stats?.vsync(timestamp: link.timestamp, duration: link.targetTimestamp - link.timestamp)
 		}
 	}
 }

@@ -167,6 +167,16 @@ int pss_session_set_controller(PSSSession *session, const PSSControllerState *st
 int pss_session_set_login_pin(PSSSession *session, const char *pin);
 int pss_session_request_idr(PSSSession *session);
 int pss_session_go_to_bed(PSSSession *session);
+typedef struct {
+	double rtt_ms;             // measured once during connection setup
+	double packet_loss;        // 0...1, rolling (congestion control window)
+	double measured_bitrate_mbps;
+	unsigned int mtu_in;
+} PSSNetworkStats;
+
+/// Snapshot of libchiaki's network statistics. Cheap; safe to call at any time.
+void pss_session_get_stats(PSSSession *session, PSSNetworkStats *out);
+
 /// Returns the controller-state idle value (sticks centred, orientation identity).
 PSSControllerState pss_controller_idle(void);
 
