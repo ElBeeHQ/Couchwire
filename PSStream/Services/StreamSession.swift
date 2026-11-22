@@ -92,7 +92,17 @@ final class StreamSession {
 		}
 		callbacks.rumble = { left, right, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
-			sink.rumble?(left, right)
+			sink.input?.rumble(left: left, right: right)
+		}
+		callbacks.trigger_effects = { typeLeft, left, typeRight, right, user in
+			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			guard let left, let right else { return }
+			sink.input?.triggerEffects(typeLeft: typeLeft, left: Array(UnsafeBufferPointer(start: left, count: 10)),
+									   typeRight: typeRight, right: Array(UnsafeBufferPointer(start: right, count: 10)))
+		}
+		callbacks.haptics = { buf, frames, user in
+			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			sink.input?.haptics(UnsafeBufferPointer(start: buf, count: frames * 2), frames: frames)
 		}
 		callbacks.quit = { _, isError, reason, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
@@ -115,6 +125,14 @@ final class StreamSession {
 		let h = handle
 		media.requestKeyframe = { _ = pss_session_request_idr(h) }
 		media.decoder.requestKeyframe = { _ = pss_session_request_idr(h) }
+		// Created before the session starts so early trigger effects aren't lost; it only
+		// starts reading the controller once we're connected.
+		let input = ControllerInput { state in
+			var s = state
+			_ = pss_session_set_controller(h, &s)
+		}
+		self.input = input
+		media.input = input
 		// Keep the system out of App Nap / timer coalescing while streaming.
 		activity = ProcessInfo.processInfo.beginActivity(
 			options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled],
@@ -143,15 +161,7 @@ final class StreamSession {
 	private func didConnect() {
 		phase = .streaming
 		startStatsTimer()
-		guard let handle else { return }
-		let h = handle
-		let input = ControllerInput { state in
-			var s = state
-			_ = pss_session_set_controller(h, &s)
-		}
-		media.rumble = { [weak input] l, r in input?.rumble(left: l, right: r) }
-		input.start()
-		self.input = input
+		input?.start()
 	}
 
 	private func didQuit(error: String?) {
@@ -181,9 +191,9 @@ final class StreamSession {
 	private func teardown() {
 		statsTimer?.invalidate()
 		statsTimer = nil
+		media.input = nil
 		input?.stop()
 		input = nil
-		media.rumble = nil
 		media.audio.stop()
 		if let activity { ProcessInfo.processInfo.endActivity(activity) }
 		activity = nil
@@ -205,8 +215,15 @@ final class MediaSink: @unchecked Sendable {
 	let audio = AudioPlayer()
 	var audioChannels = 2
 	var requestKeyframe: () -> Void = {}
-	var rumble: ((UInt8, UInt8) -> Void)?
 	weak var owner: StreamSession?
+
+	/// Read from libchiaki threads, written on the main thread: guard the reference.
+	private var _input: ControllerInput?
+	private var inputLock = os_unfair_lock()
+	var input: ControllerInput? {
+		get { os_unfair_lock_lock(&inputLock); defer { os_unfair_lock_unlock(&inputLock) }; return _input }
+		set { os_unfair_lock_lock(&inputLock); _input = newValue; os_unfair_lock_unlock(&inputLock) }
+	}
 
 	let stats: StreamStats
 

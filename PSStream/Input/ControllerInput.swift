@@ -1,4 +1,3 @@
-import CoreHaptics
 import Foundation
 import GameController
 import os
@@ -17,7 +16,7 @@ final class ControllerInput: @unchecked Sendable {
 	private var controller: GCController?
 	private let send: (PSSControllerState) -> Void
 	private let log = Logger(subsystem: "PSStream", category: "Input")
-	private var haptics: RumbleEngine?
+	private lazy var feedback = ControllerFeedback(queue: queue)
 
 	init(send: @escaping (PSSControllerState) -> Void) {
 		self.send = send
@@ -51,14 +50,28 @@ final class ControllerInput: @unchecked Sendable {
 			controller?.extendedGamepad?.valueChangedHandler = nil
 			controller?.motion?.valueChangedHandler = nil
 			GCKeyboard.coalesced?.keyboardInput?.keyChangedHandler = nil
-			haptics?.stop()
-			haptics = nil
+			feedback.detach()
 			controller = nil
 		}
 	}
 
 	func rumble(left: UInt8, right: UInt8) {
-		queue.async { self.haptics?.set(left: left, right: right) }
+		queue.async { self.feedback.setRumble(left: left, right: right) }
+	}
+
+	/// Raw DualSense trigger effects from the console (type byte + 10 parameter bytes each).
+	func triggerEffects(typeLeft: UInt8, left: [UInt8], typeRight: UInt8, right: [UInt8]) {
+		let l = TriggerEffect(type: typeLeft, params: left)
+		let r = TriggerEffect(type: typeRight, params: right)
+		log.debug("Trigger params L=\(left.map { String(format: "%02x", $0) }.joined(separator: " "), privacy: .public) R=\(right.map { String(format: "%02x", $0) }.joined(separator: " "), privacy: .public)")
+		log.info("Trigger effects L=0x\(String(typeLeft, radix: 16), privacy: .public)\(l == nil ? " (unsupported)" : "", privacy: .public) R=0x\(String(typeRight, radix: 16), privacy: .public)\(r == nil ? " (unsupported)" : "", privacy: .public)")
+		let rawLeft = [typeLeft] + left.prefix(10), rawRight = [typeRight] + right.prefix(10)
+		queue.async { self.feedback.setTriggerEffects(rawLeft: rawLeft, rawRight: rawRight, left: l, right: r) }
+	}
+
+	/// Haptic PCM from the console, called on libchiaki's receive thread.
+	func haptics(_ pcm: UnsafeBufferPointer<Int16>, frames: Int) {
+		feedback.pushHaptics(pcm, frames: frames)
 	}
 
 	// MARK: - Controller
@@ -75,7 +88,7 @@ final class ControllerInput: @unchecked Sendable {
 			motion.sensorsActive = true
 			motion.valueChangedHandler = { [weak self] m in self?.update(motion: m) }
 		}
-		haptics = RumbleEngine(controller: c)
+		feedback.attach(c)
 		update(from: pad)
 	}
 
@@ -83,8 +96,7 @@ final class ControllerInput: @unchecked Sendable {
 		guard c === controller else { return }
 		c.extendedGamepad?.valueChangedHandler = nil
 		c.motion?.valueChangedHandler = nil
-		haptics?.stop()
-		haptics = nil
+		feedback.detach()
 		controller = nil
 		let idle = pss_controller_idle()
 		state = idle
@@ -202,70 +214,5 @@ final class ControllerInput: @unchecked Sendable {
 			state.buttons = (state.buttons & ~UInt32(0xFFFF)) | keyboardButtons
 			if let pad = controller?.extendedGamepad { update(from: pad) } else { send(state) }
 		}
-	}
-}
-
-/// Simple dual-motor rumble via Core Haptics on the controller.
-final class RumbleEngine {
-	private var engines: [CHHapticEngineWrapper] = []
-
-	init?(controller: GCController) {
-		guard let haptics = controller.haptics else { return nil }
-		for locality in [GCHapticsLocality.leftHandle, .rightHandle] {
-			if let e = CHHapticEngineWrapper(haptics: haptics, locality: locality) { engines.append(e) }
-		}
-		if engines.isEmpty { return nil }
-	}
-
-	func set(left: UInt8, right: UInt8) {
-		if engines.count >= 2 {
-			engines[0].set(intensity: Float(left) / 255)
-			engines[1].set(intensity: Float(right) / 255)
-		} else {
-			engines.first?.set(intensity: Float(max(left, right)) / 255)
-		}
-	}
-
-	func stop() { engines.forEach { $0.stop() } }
-}
-
-
-final class CHHapticEngineWrapper {
-	private let engine: CHHapticEngine
-	private var player: CHHapticAdvancedPatternPlayer?
-
-	init?(haptics: GCDeviceHaptics, locality: GCHapticsLocality) {
-		guard let engine = haptics.createEngine(withLocality: locality) else { return nil }
-		self.engine = engine
-		engine.isAutoShutdownEnabled = false
-		try? engine.start()
-	}
-
-	func set(intensity: Float) {
-		do {
-			if intensity <= 0.01 {
-				try player?.stop(atTime: CHHapticTimeImmediate)
-				player = nil
-				return
-			}
-			if player == nil {
-				let event = CHHapticEvent(eventType: .hapticContinuous,
-										  parameters: [CHHapticEventParameter(parameterID: .hapticIntensity, value: 1)],
-										  relativeTime: 0, duration: 30)
-				let pattern = try CHHapticPattern(events: [event], parameters: [])
-				player = try engine.makeAdvancedPlayer(with: pattern)
-				player?.loopEnabled = true
-				try player?.start(atTime: CHHapticTimeImmediate)
-			}
-			let p = CHHapticDynamicParameter(parameterID: .hapticIntensityControl, value: intensity, relativeTime: 0)
-			try player?.sendParameters([p], atTime: CHHapticTimeImmediate)
-		} catch {
-			player = nil
-		}
-	}
-
-	func stop() {
-		try? player?.stop(atTime: CHHapticTimeImmediate)
-		engine.stop()
 	}
 }

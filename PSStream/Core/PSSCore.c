@@ -302,6 +302,11 @@ static void session_event_cb(ChiakiEvent *event, void *user)
 			if(s->cb.rumble)
 				s->cb.rumble(event->rumble.left, event->rumble.right, s->cb.user);
 			break;
+		case CHIAKI_EVENT_TRIGGER_EFFECTS:
+			if(s->cb.trigger_effects)
+				s->cb.trigger_effects(event->trigger_effects.type_left, event->trigger_effects.left,
+						event->trigger_effects.type_right, event->trigger_effects.right, s->cb.user);
+			break;
 		case CHIAKI_EVENT_QUIT:
 			if(s->cb.quit)
 				s->cb.quit((int)event->quit.reason, chiaki_quit_reason_is_error(event->quit.reason),
@@ -319,6 +324,21 @@ static bool session_video_cb(uint8_t *buf, size_t buf_size, int32_t frames_lost,
 	if(s->cb.video)
 		return s->cb.video(buf, buf_size, frames_lost, frame_recovered, s->cb.user);
 	return true;
+}
+
+static void haptics_frame_cb(uint8_t *buf, size_t buf_size, void *user)
+{
+	PSSSession *s = user;
+	const size_t frame_bytes = 2 * sizeof(int16_t);
+	if(!s->cb.haptics || buf_size < frame_bytes)
+		return;
+	// The buffer is not guaranteed to be 2-byte aligned; copy into an aligned scratch buffer.
+	int16_t pcm[256];
+	size_t frames = buf_size / frame_bytes;
+	if(frames > sizeof(pcm) / frame_bytes)
+		frames = sizeof(pcm) / frame_bytes;
+	memcpy(pcm, buf, frames * frame_bytes);
+	s->cb.haptics(pcm, frames, s->cb.user);
 }
 
 static void opus_settings_cb(uint32_t channels, uint32_t rate, void *user)
@@ -387,6 +407,11 @@ PSSSession *pss_session_create(const PSSSessionConfig *config, PSSSessionCallbac
 	ChiakiAudioSink sink;
 	chiaki_opus_decoder_get_sink(&s->opus, &sink);
 	chiaki_session_set_audio_sink(&s->session, &sink);
+
+	ChiakiAudioSink haptics_sink = {0};
+	haptics_sink.user = s;
+	haptics_sink.frame_cb = haptics_frame_cb;
+	chiaki_session_set_haptics_sink(&s->session, &haptics_sink);
 
 	chiaki_session_set_event_cb(&s->session, session_event_cb, s);
 	chiaki_session_set_video_sample_cb(&s->session, session_video_cb, s);

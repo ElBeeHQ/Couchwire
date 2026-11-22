@@ -119,6 +119,10 @@ typedef struct {
 	void (*login_pin_request)(bool pin_incorrect, void *user);
 	void (*rumble)(uint8_t left, uint8_t right, void *user);
 	void (*quit)(int reason, bool is_error, const char *reason_str, void *user);
+	/// Raw DualSense adaptive-trigger effects: effect type byte + 10 parameter bytes per trigger.
+	void (*trigger_effects)(uint8_t type_left, const uint8_t *left, uint8_t type_right, const uint8_t *right, void *user);
+	/// DualSense haptics: interleaved stereo (left, right) signed 16-bit PCM at 3000 Hz.
+	void (*haptics)(const int16_t *buf, size_t frames, void *user);
 } PSSSessionCallbacks;
 
 /// Mirrors ChiakiControllerState. Axes are -32768...32767 (Y down positive, as on DualSense).
