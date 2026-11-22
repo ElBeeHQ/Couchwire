@@ -7,6 +7,7 @@ struct PairingSheet: View {
 	@State private var pin = ""
 	@State private var working = false
 	@State private var error: String?
+	@State private var signingIn = false
 
 	var body: some View {
 		@Bindable var model = model
@@ -21,8 +22,17 @@ struct PairingSheet: View {
 				if target.name == nil {
 					TextField("IP Address", text: $target.address, prompt: Text("192.168.1.20"))
 				}
-				TextField("PSN Account ID", text: $model.accountID, prompt: Text("Base64, e.g. AbCdEfGhIjk="))
-					.help("Your PSN account ID, Base64-encoded. This is not your sign-in ID or email.")
+				LabeledContent("PSN Account") {
+					HStack {
+						if model.accountID.isEmpty {
+							Text("Not signed in").foregroundStyle(.secondary)
+						} else {
+							Label(model.accountID, systemImage: "checkmark.circle.fill")
+								.labelStyle(AccountLabelStyle())
+						}
+						Button(model.accountID.isEmpty ? "Sign In…" : "Change…") { signingIn = true }
+					}
+				}
 				TextField("Code", text: $pin, prompt: Text("8 digits"))
 					.font(.body.monospacedDigit())
 			}
@@ -50,6 +60,9 @@ struct PairingSheet: View {
 		}
 		.padding(24)
 		.frame(width: 440)
+		.sheet(isPresented: $signingIn) {
+			PSNSignInSheet { model.accountID = $0 }
+		}
 	}
 
 	private func pair() {
@@ -63,6 +76,15 @@ struct PairingSheet: View {
 				self.error = error.localizedDescription
 			}
 			working = false
+		}
+	}
+}
+
+private struct AccountLabelStyle: LabelStyle {
+	func makeBody(configuration: Configuration) -> some View {
+		HStack(spacing: 4) {
+			configuration.icon.foregroundStyle(.green)
+			configuration.title.font(.body.monospaced()).foregroundStyle(.secondary)
 		}
 	}
 }

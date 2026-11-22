@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
 	@Environment(AppModel.self) private var model
+	@State private var signingIn = false
 
 	var body: some View {
 		@Bindable var model = model
@@ -28,8 +29,23 @@ struct SettingsView: View {
 					}
 				}
 			}
-			Section("Account") {
-				TextField("PSN Account ID", text: $model.accountID)
+			Section {
+				LabeledContent("PSN Account ID") {
+					HStack {
+						Text(model.accountID.isEmpty ? "Not signed in" : model.accountID)
+							.font(.body.monospaced())
+							.foregroundStyle(.secondary)
+							.textSelection(.enabled)
+						Button(model.accountID.isEmpty ? "Sign In…" : "Change…") { signingIn = true }
+					}
+				}
+				TextField("Enter Manually", text: $model.accountID, prompt: Text("Base64, e.g. AbCdEfGhIjk="))
+			} header: {
+				Text("Account")
+			} footer: {
+				Text("Needed once, to pair with a console. Signing in only saves your Account ID.")
+					.font(.caption)
+					.foregroundStyle(.secondary)
 			}
 			Section {
 				Text("For the lowest latency, connect your Mac and PS5 with Ethernet, and play in full screen so macOS Game Mode turns on.")
@@ -40,5 +56,8 @@ struct SettingsView: View {
 		.formStyle(.grouped)
 		.frame(width: 460)
 		.fixedSize()
+		.sheet(isPresented: $signingIn) {
+			PSNSignInSheet { model.accountID = $0 }
+		}
 	}
 }
