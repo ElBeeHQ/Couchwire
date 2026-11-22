@@ -15,7 +15,7 @@ struct StreamWindowView: View {
 				if showStats, session.phase == .streaming {
 					StatsOverlay(stats: session.stats)
 						.padding(16)
-						.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+						.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
 				}
 			} else {
 				Text("No active session").foregroundStyle(.secondary)
@@ -142,6 +142,12 @@ private struct WindowConfigurator: NSViewRepresentable {
 		DispatchQueue.main.async {
 			guard let w = v.window else { return }
 			w.contentAspectRatio = NSSize(width: 16, height: 9)
+			// The aspect lock only applies to live resizes; snap the current (possibly
+			// restored) size to 16:9 too, keeping the width, so there are no bars.
+			if !w.styleMask.contains(.fullScreen) {
+				let size = w.contentLayoutRect.size
+				w.setContentSize(NSSize(width: size.width, height: (size.width * 9 / 16).rounded()))
+			}
 			w.collectionBehavior.insert(.fullScreenPrimary)
 			w.backgroundColor = .black
 			w.titlebarAppearsTransparent = true
