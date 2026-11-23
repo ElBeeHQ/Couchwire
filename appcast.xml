@@ -3,6 +3,39 @@
     <channel>
         <title>Couchwire</title>
         <item>
+            <title>0.2.0</title>
+            <pubDate>Mon, 23 Nov 2026 05:42:00 +0000</pubDate>
+            <link>https://github.com/ElBeeHQ/Couchwire</link>
+            <sparkle:version>0.2.0</sparkle:version>
+            <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.0: Play from anywhere
+
+*23 November 2026*
+
+Couchwire now plays your PS5 away from home, adjusts to the connection you're on and keeps going when your Mac changes network.
+
+### Added
+
+- **Internet play.** Turn on **Settings › Internet Play** and sign in to PlayStation Network to play your PS5 away from home, with no port forwarding. Couchwire wakes the console through PSN and shows each step while it connects. Most VPNs block it, and Couchwire says so when one is on.
+- **Automatic quality.** Each stream starts at what the connection can handle (lower over the internet and on mobile hotspots), never above your own settings, and learns from every session. If a stream keeps struggling, Couchwire offers to restart it at lower quality.
+- **Smoothing** (**Settings › Video**) evens out frames that arrive unevenly. Automatic works hardest on mobile hotspots and adds no delay on a steady network; Off, Balanced and Steadiest are there too, and changes apply mid-stream.
+- **Reconnects by itself** when your Mac moves to another network mid-game: the frozen picture is replaced by "Reconnecting…" and the stream resumes at home or over the internet, whichever works from the new network.
+- **Frame rate** in the performance stats, and a frame-pacing graph showing when frames arrived and when they were shown.
+
+### Fixed
+
+- Sound no longer stutters or jumps on uneven connections: Couchwire keeps a little more audio in reserve when it needs to.
+- The performance stats fit smaller windows, and only flag lost frames and audio gaps from the last 30 seconds.
+
+**Update:** Couchwire 0.1.0 offers this update by itself; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.0.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
+
+**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.0-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.0-dependencies-source.tar` holds the exact sources of the libraries it's built with.
+]]></description>
+            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.0/Couchwire-0.2.0.dmg" length="7072195" type="application/octet-stream" sparkle:edSignature="AkrSyQf6U0ysxlS0QIojcFN+1U39OKEsJH3ROQ3Bvu6titMdiGf6Y3fAuGy3VtBAmE5TN/JlLpr6cu8sX0JABw=="/>
+        </item>
+        <item>
             <title>0.1.0</title>
             <pubDate>Mon, 23 Nov 2026 02:48:16 +0000</pubDate>
             <link>https://github.com/ElBeeHQ/Couchwire</link>
