@@ -148,6 +148,8 @@ private struct WindowConfigurator: NSViewRepresentable {
 				let size = w.contentLayoutRect.size
 				w.setContentSize(NSSize(width: size.width, height: (size.width * 9 / 16).rounded()))
 			}
+			// A stream can't be resumed after relaunch, so never reopen this window at launch.
+			w.isRestorable = false
 			w.collectionBehavior.insert(.fullScreenPrimary)
 			w.backgroundColor = .black
 			w.titlebarAppearsTransparent = true

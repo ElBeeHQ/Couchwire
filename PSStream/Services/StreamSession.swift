@@ -30,6 +30,7 @@ final class StreamSession {
 	@ObservationIgnored private var activity: NSObjectProtocol?
 	@ObservationIgnored private var box: Unmanaged<MediaSink>?
 	@ObservationIgnored private var statsTimer: Timer?
+	@ObservationIgnored private var pinger: ConsolePinger?
 
 	init(console: RegisteredConsole, keys: ConsoleKeys, settings: StreamSettings) {
 		self.console = console
@@ -135,7 +136,7 @@ final class StreamSession {
 		media.decoder.requestKeyframe = { _ = pss_session_request_idr(h) }
 		// Created before the session starts so early trigger effects aren't lost; it only
 		// starts reading the controller once we're connected.
-		let input = ControllerInput { state in
+		let input = ControllerInput(stats: statsCollector) { state in
 			var s = state
 			_ = pss_session_set_controller(h, &s)
 		}
@@ -169,6 +170,9 @@ final class StreamSession {
 	private func didConnect() {
 		phase = .streaming
 		startStatsTimer()
+		let collector = statsCollector
+		pinger = ConsolePinger(address: console.lastAddress) { collector.ping($0) }
+		pinger?.start()
 		input?.start()
 	}
 
@@ -199,6 +203,8 @@ final class StreamSession {
 	private func teardown() {
 		statsTimer?.invalidate()
 		statsTimer = nil
+		pinger?.stop()
+		pinger = nil
 		media.input = nil
 		input?.stop()
 		input = nil

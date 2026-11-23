@@ -21,20 +21,46 @@ final class DualSenseHID: @unchecked Sendable {
 	private var failed = false
 	private let queue = DispatchQueue(label: "PSStream.hid", qos: .userInteractive)
 	private let log = Logger(subsystem: "PSStream", category: "Feedback")
+	private let reports: InputReports?
 
-	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool) {
+	/// Owns the input-report buffer and callback; released by the device's cancel handler,
+	/// so it outlives any callback still in flight.
+	private final class InputReports {
+		let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 128)
+		let handler: () -> Void
+		init(handler: @escaping () -> Void) { self.handler = handler }
+		deinit { buffer.deallocate() }
+	}
+
+	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool, onInputReport: (() -> Void)?) {
 		self.manager = manager
 		self.device = device
 		self.isBluetooth = isBluetooth
+		if let onInputReport {
+			let reports = InputReports(handler: onInputReport)
+			self.reports = reports
+			let context = Unmanaged.passRetained(reports)
+			IOHIDDeviceSetDispatchQueue(device, queue)
+			IOHIDDeviceRegisterInputReportCallback(device, reports.buffer, 128, { ctx, _, _, _, _, _, _ in
+				guard let ctx else { return }
+				Unmanaged<InputReports>.fromOpaque(ctx).takeUnretainedValue().handler()
+			}, context.toOpaque())
+			IOHIDDeviceSetCancelHandler(device) { context.release() }
+			IOHIDDeviceActivate(device)
+		} else {
+			reports = nil
+		}
 	}
 
 	deinit {
+		if reports != nil { IOHIDDeviceCancel(device) }
 		IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
 		IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
 	}
 
-	/// Opens the first connected DualSense, or returns nil.
-	static func open() -> DualSenseHID? {
+	/// Opens the first connected DualSense, or returns nil. `onInputReport` is called on the
+	/// HID queue for every input report, to measure the controller's report rate.
+	static func open(onInputReport: (() -> Void)? = nil) -> DualSenseHID? {
 		let log = Logger(subsystem: "PSStream", category: "Feedback")
 		let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
 		let matches = productIDs.map { [kIOHIDVendorIDKey: sonyVendorID, kIOHIDProductIDKey: $0] as CFDictionary }
@@ -57,7 +83,7 @@ final class DualSenseHID: @unchecked Sendable {
 		let transport = IOHIDDeviceGetProperty(device, kIOHIDTransportKey as CFString) as? String ?? ""
 		let bt = transport.localizedCaseInsensitiveContains("bluetooth")
 		log.info("DualSense HID opened over \(transport, privacy: .public)")
-		return DualSenseHID(manager: manager, device: device, isBluetooth: bt)
+		return DualSenseHID(manager: manager, device: device, isBluetooth: bt, onInputReport: onInputReport)
 	}
 
 	/// Sets both adaptive triggers from raw effect blocks (type byte + 10 parameter bytes).

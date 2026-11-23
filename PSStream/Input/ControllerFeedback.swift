@@ -15,6 +15,10 @@ final class ControllerFeedback: @unchecked Sendable {
 	private static let rawOff: [UInt8] = [0x05] + [UInt8](repeating: 0, count: 10)
 	private var rawTriggers: (left: [UInt8], right: [UInt8]) = (rawOff, rawOff)
 	private var hid: DualSenseHID?
+	/// Called on the HID queue for every input report from the DualSense.
+	var onInputReport: (() -> Void)?
+	/// True while input reports are counted straight from the DualSense over HID.
+	var countsReports: Bool { hid != nil }
 	private var keepaliveTicks = 0
 	private var reconnectAfter: CFTimeInterval = 0
 	/// PS5 defaults until the console says otherwise: player 1 blue.
@@ -47,7 +51,7 @@ final class ControllerFeedback: @unchecked Sendable {
 	/// (Re)opens the DualSense on whatever transport it's on now and picks the haptics path:
 	/// USB → voice coils via its audio device; Bluetooth → HID rumble emulation.
 	private func connectDevices() {
-		hid = DualSenseHID.open()
+		hid = DualSenseHID.open(onInputReport: onInputReport)
 		hid?.onFailure = { [weak self] in
 			guard let self else { return }
 			queue.async { self.devicesChanged() }

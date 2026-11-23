@@ -1,5 +1,6 @@
 import Foundation
 import GameController
+import QuartzCore
 import os
 
 /// Maps the active game controller (DualSense, DualShock 4, Xbox, MFi…) and the keyboard
@@ -17,9 +18,13 @@ final class ControllerInput: @unchecked Sendable {
 	private let send: (PSSControllerState) -> Void
 	private let log = Logger(subsystem: "PSStream", category: "Input")
 	private lazy var feedback = ControllerFeedback(queue: queue)
+	private let stats: StreamStats?
+	private var loggedClock = false
 
-	init(send: @escaping (PSSControllerState) -> Void) {
+	init(stats: StreamStats? = nil, send: @escaping (PSSControllerState) -> Void) {
+		self.stats = stats
 		self.send = send
+		feedback.onInputReport = { [weak stats] in stats?.inputReport() }
 	}
 
 	func start() {
@@ -154,6 +159,14 @@ final class ControllerInput: @unchecked Sendable {
 
 		state.buttons = b | keyboardButtons
 		send(state)
+		// GameController stamps events with wall-clock (Unix) time, not mach time.
+		let sentAt = Date().timeIntervalSince1970
+		let eventAt = pad.lastEventTimestamp
+		if !loggedClock, eventAt > 0 {
+			loggedClock = true
+			log.info("Input clock check: delta \((sentAt - eventAt) * 1000) ms")
+		}
+		stats?.inputSent(eventAt: eventAt, sentAt: sentAt)
 	}
 
 	private var touchIDs: [Int8] = [-1, -1]
@@ -194,6 +207,7 @@ final class ControllerInput: @unchecked Sendable {
 			state.orient_w = Float(m.attitude.w)
 		}
 		send(state)
+		if !feedback.countsReports { stats?.inputReport() }
 	}
 
 	private func axis(_ v: Float) -> Int16 {
