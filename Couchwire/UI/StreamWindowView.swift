@@ -7,6 +7,7 @@ struct StreamWindowView: View {
 	@Environment(AppModel.self) private var model
 	@Environment(\.dismissWindow) private var dismissWindow
 	@AppStorage("showStats") private var showStats = false
+	@AppStorage("psButtonTipSeen") private var psButtonTipSeen = false
 	@State private var window = StreamWindowState()
 	@State private var controlsVisible = false
 	@State private var hoveringControls = false
@@ -67,6 +68,10 @@ struct StreamWindowView: View {
 						dismiss: { session.strugglingDismissed = true })
 					.padding(24)
 					.transition(.move(edge: .bottom).combined(with: .opacity))
+				} else if let session = model.session, session.phase == .streaming, !psButtonTipSeen {
+					PSButtonTip(done: { withAnimation { psButtonTipSeen = true } })
+						.padding(24)
+						.transition(.move(edge: .bottom).combined(with: .opacity))
 				}
 			}
 			.overlay {
@@ -236,6 +241,55 @@ private struct StrugglingBanner: View {
 		.frame(maxWidth: 560)
 		.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
 		.environment(\.colorScheme, .dark)
+	}
+}
+
+/// Shown once, the first time you stream with a controller that has a PS (Home) button.
+/// macOS keeps that button for its Games overlay unless the app is on the Home Button
+/// Overrides list, which only you can change. Couchwire can't tell whether it's on the list.
+private struct PSButtonTip: View {
+	let done: () -> Void
+	@State private var hasHomeButton = Self.controllerHasHomeButton
+
+	private static var controllerHasHomeButton: Bool {
+		GCController.controllers().contains { $0.extendedGamepad?.buttonHome != nil }
+	}
+
+	var body: some View {
+		Group {
+			if hasHomeButton {
+				HStack(spacing: 14) {
+					Image(systemName: "playstation.logo")
+						.font(.title2)
+					VStack(alignment: .leading, spacing: 2) {
+						Text("Does the PS button open Games on your Mac?").font(.headline)
+						Text("To send it to your PS5 instead, add Couchwire to Home Button Overrides in Game Controllers settings. You only need to do this once.")
+							.font(.callout)
+							.foregroundStyle(.secondary)
+							.fixedSize(horizontal: false, vertical: true)
+					}
+					Button("Open Settings") {
+						if let url = URL(string: "x-apple.systempreferences:com.apple.Game-Controller-Settings.extension") {
+							NSWorkspace.shared.open(url)
+						}
+						done()
+					}
+					.buttonStyle(.borderedProminent)
+					Button(action: done) {
+						Image(systemName: "xmark")
+					}
+					.buttonStyle(.borderless)
+					.help("Don’t show this again")
+				}
+				.padding(16)
+				.frame(maxWidth: 560)
+				.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+				.environment(\.colorScheme, .dark)
+			}
+		}
+		.onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect).receive(on: RunLoop.main)) { _ in
+			hasHomeButton = Self.controllerHasHomeButton
+		}
 	}
 }
 

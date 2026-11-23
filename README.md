@@ -59,6 +59,8 @@ DualSense support, HDR and low latency.
 2. Allow it once. Couchwire isn't notarised by Apple, so the first time you open it macOS may say it can't verify it:
    open **System Settings › Privacy & Security**, scroll to the message about Couchwire and click **Open Anyway**.
 3. Follow the setup: turn on Remote Play on your PS5, sign in to PlayStation Network and pair with the code on your TV.
+4. If the PS button opens Games on your Mac instead of the PS5 menu, open **System Settings › Game Controllers**, and
+   add Couchwire to **Home Button Overrides**. You only do this once.
 
 Needs macOS 14 or later on Apple silicon, a PS5, and a PlayStation Network account. Pairing is done once on the same
 network; after that you can also play over the internet. Most VPNs block internet play. A wired

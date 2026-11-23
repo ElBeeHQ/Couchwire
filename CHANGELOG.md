@@ -14,6 +14,7 @@
 
 ### Added
 
+- The first time you stream with a DualSense or another controller with a Home button, Couchwire explains how to send the PS button to your PS5 instead of opening Games on your Mac, with a button that opens Game Controllers settings.
 - Couchwire writes a line of performance stats to the system log every 10 seconds while streaming, and logs each connect, wake-up and error message, so slow or failed connections can be looked into afterwards.
 
 ## v0.2.0: Play from anywhere
