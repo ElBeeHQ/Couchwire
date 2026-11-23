@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Couchwire</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -12,37 +14,35 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>Couchwire</string>
-	<key>CFBundleDisplayName</key>
-	<string>Couchwire</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.2.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.1.0</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
-	<key>NSPrincipalClass</key>
-	<string>NSApplication</string>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.games</string>
+	<string>0.2.0</string>
 	<key>GCSupportsGameMode</key>
 	<true/>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Couchwire sends your voice to the PS5 for game and party chat when you turn on the microphone.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Couchwire finds and connects to PS5 consoles on your local network.</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.games</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSBonjourServices</key>
 	<array/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>© 2026 ElBeeHQ</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Couchwire finds and connects to PS5 consoles on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Couchwire sends your voice to the PS5 for game and party chat when you turn on the microphone.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/ElBeeHQ/Couchwire/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>LO8mGPPsVvCItsFZh/4FGfSlcvdOEewBhoVsTSttb8Y=</string>
-	<key>SUEnableAutomaticChecks</key>
-	<true/>
-	<key>NSHumanReadableCopyright</key>
-	<string>© 2026 ElBeeHQ</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
 </dict>
 </plist>

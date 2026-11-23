@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.2.0: Play from anywhere
+
+*23 November 2026*
+
+Couchwire now plays your PS5 away from home, adjusts to the connection you're on and keeps going when your Mac changes network.
 
 ### Added
 
