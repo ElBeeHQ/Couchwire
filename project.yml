@@ -34,24 +34,27 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Couchwire/Couchwire.entitlements
         CODE_SIGN_IDENTITY: "-"
         CODE_SIGN_STYLE: Manual
-        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_HARDENED_RUNTIME: YES
         SWIFT_OBJC_BRIDGING_HEADER: Couchwire/Core/Couchwire-Bridging-Header.h
         HEADER_SEARCH_PATHS:
           - $(PROJECT_DIR)/Vendor/chiaki-ng/lib/include
           - $(PROJECT_DIR)/build/chiaki/lib/include
+        # Everything is static (scripts/build-deps.sh), so the app needs nothing from Homebrew.
         LIBRARY_SEARCH_PATHS:
           - $(PROJECT_DIR)/build/chiaki/out
-          - /opt/homebrew/lib
-          - /opt/homebrew/opt/openssl/lib
-          - /opt/homebrew/opt/curl/lib
+          - $(PROJECT_DIR)/build/deps/prefix/lib
         OTHER_LDFLAGS:
           - -lchiaki_all
+          - -lcurl
+          - -lssl
           - -lcrypto
           - -lopus
           - -ljson-c
           - -lminiupnpc
           - -levent
-          - -lcurl
+          - -lz
           - -framework CoreServices
+          - -framework SystemConfiguration
+          - -framework Security
         GCC_OPTIMIZATION_LEVEL: "3"
         SWIFT_OPTIMIZATION_LEVEL: -O

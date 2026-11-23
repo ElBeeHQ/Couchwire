@@ -2,9 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Not sandboxed yet: libchiaki opens raw UDP/TCP sockets and the app currently
-	     links Homebrew dylibs. Revisit (sandbox + bundled static deps) before distribution. -->
+	<!-- Not sandboxed: libchiaki needs raw UDP broadcast (discovery, wake) and its own
+	     sockets. Developer ID distribution doesn't require the sandbox. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- Hardened runtime: the microphone for game and party chat. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

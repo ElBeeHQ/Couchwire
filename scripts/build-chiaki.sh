@@ -1,14 +1,32 @@
 #!/bin/bash
 # Builds libchiaki (the PlayStation Remote Play protocol core from chiaki-ng)
-# as a static library for the Couchwire macOS app.
+# as a static library for the Couchwire macOS app, against the static dependencies
+# from scripts/build-deps.sh (built first if missing), for macOS 14+.
 #
-# Prereqs (Homebrew): cmake pkg-config protobuf json-c miniupnpc libevent curl openssl opus
+# Build tools (Homebrew): cmake pkg-config protobuf
 # A Python venv at .venv with `protobuf` is used for nanopb code generation.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BREW="$(brew --prefix)"
 BUILD="$ROOT/build/chiaki"
+DEPS="$ROOT/build/deps/prefix"
+
+if [ ! -f "$DEPS/lib/libcurl.a" ]; then
+	"$ROOT/scripts/build-deps.sh"
+fi
+# Only our own static deps: never let CMake or pkg-config find Homebrew's copies.
+export PKG_CONFIG_LIBDIR="$DEPS/lib/pkgconfig"
+export PKG_CONFIG_PATH=""
+export MACOSX_DEPLOYMENT_TARGET=14.0
+
+# chiaki-ng forces its deployment target to the build machine's macOS (read from sw_vers),
+# because its own app bundles Homebrew's libraries. Ours are built for 14.0, so give its
+# CMake a sw_vers that reports that instead of patching the submodule.
+SHIM="$BUILD/shim"
+mkdir -p "$SHIM"
+printf '#!/bin/sh\necho %s\n' "$MACOSX_DEPLOYMENT_TARGET" > "$SHIM/sw_vers"
+chmod +x "$SHIM/sw_vers"
+export PATH="$SHIM:$PATH"
 
 if [ ! -x "$ROOT/.venv/bin/python3" ]; then
 	python3 -m venv "$ROOT/.venv"
@@ -18,6 +36,7 @@ fi
 cmake -S "$ROOT/Vendor/chiaki-ng" -B "$BUILD" \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_OSX_ARCHITECTURES=arm64 \
+	-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
 	-DCHIAKI_ENABLE_TESTS=OFF \
 	-DCHIAKI_ENABLE_CLI=OFF \
 	-DCHIAKI_ENABLE_GUI=OFF \
@@ -31,8 +50,10 @@ cmake -S "$ROOT/Vendor/chiaki-ng" -B "$BUILD" \
 	-DCHIAKI_USE_SYSTEM_NANOPB=OFF \
 	-DCHIAKI_USE_SYSTEM_JERASURE=OFF \
 	-DPYTHON_EXECUTABLE="$ROOT/.venv/bin/python3" \
-	-DOPENSSL_ROOT_DIR="$BREW/opt/openssl" \
-	-DCMAKE_PREFIX_PATH="$BREW;$BREW/opt/curl;$BREW/opt/openssl"
+	-DOPENSSL_ROOT_DIR="$DEPS" \
+	-DOPENSSL_USE_STATIC_LIBS=ON \
+	-DCMAKE_PREFIX_PATH="$DEPS" \
+	-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew
 
 cmake --build "$BUILD" --target chiaki-lib -j "$(sysctl -n hw.ncpu)"
 
