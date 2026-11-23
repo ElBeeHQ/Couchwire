@@ -242,8 +242,12 @@ final class AppModel {
 		// Over the internet when the console can't be seen here. A console still listed from the network
 		// the Mac has just left doesn't count: its address isn't on this one.
 		let current = registered.first { $0.hostID == console.hostID } ?? console
-		if internetPlay, psnSignedIn,
-		   discoveredState(of: console) == nil || !LocalNetwork.contains(current.lastAddress) {
+		let away = discoveredState(of: console) == nil || !LocalNetwork.contains(current.lastAddress)
+		let awayAddress = profile.awayAddress.trimmingCharacters(in: .whitespaces)
+		if away, !awayAddress.isEmpty {
+			return connectDirect(console, keys: keys, address: awayAddress, profile: profile)
+		}
+		if internetPlay, psnSignedIn, away {
 			return await connectOverInternet(console, keys: keys, ceiling: profile.customStream ?? settings)
 		}
 		if discoveredState(of: console)?.state == .standby {
@@ -297,13 +301,35 @@ final class AppModel {
 		return s
 	}
 
+	/// Away from home, straight to the address the user gave (port forwarding on their router), without PSN.
+	/// Works on networks where PSN can't open a direct connection, such as mobile data. A console in rest
+	/// mode is woken first; it can't be watched from here, so the session simply keeps trying while it starts.
+	private func connectDirect(_ console: RegisteredConsole, keys: ConsoleKeys, address: String, profile: ConsoleProfile) -> StreamSession {
+		StreamSession.timing.notice("Connecting straight to \(address, privacy: .private)")
+		if profile.autoWake {
+			let sent = DiscoveryService.wake(address: address, keys: keys, ps5: console.isPS5)
+			StreamSession.timing.notice("Wake \(sent ? "sent" : "failed to send", privacy: .public) to the away address")
+		}
+		// Up to about a minute of tries (each waits up to 5 s for an answer, then 3 s), enough for a PS5 to wake
+		// from rest mode. A wrong address or a missing port forward fails after that.
+		let s = makeSession(console, keys: keys, ceiling: profile.customStream ?? settings, retries: 7, address: address)
+		session = s
+		s.start()
+		return s
+	}
+
 	/// A session that, if the console turns out not to be ready yet, quietly tries again a few seconds later
-	/// (the stream window keeps showing "Connecting…").
-	private func makeSession(_ console: RegisteredConsole, keys: ConsoleKeys, ceiling: StreamSettings, retries: Int) -> StreamSession {
-		let current = registered.first { $0.hostID == console.hostID } ?? console
-		let link = ConnectionQuality.currentLink(internet: false)
+	/// (the stream window keeps showing "Connecting…"). `address` connects straight to an address away from home.
+	private func makeSession(_ console: RegisteredConsole, keys: ConsoleKeys, ceiling: StreamSettings, retries: Int,
+							 address: String? = nil) -> StreamSession {
+		var current = registered.first { $0.hostID == console.hostID } ?? console
+		if let address { current.lastAddress = address }
+		let link = ConnectionQuality.currentLink(internet: address != nil)
 		let s = StreamSession(console: current, keys: keys, settings: streamSettings(link, ceiling: ceiling), link: link,
 							  automaticQuality: autoQuality, smoothing: smoothing)
+		if let address {
+			s.unreachableHint = "Couldn’t reach \(console.nickname) at \(address). Check that your router forwards the PS5’s ports (9295 TCP and UDP, and 9296, 9297 and 9302 UDP) to it, and that the address is your home’s current one."
+		}
 		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
 		s.retryWhenNotReady = { [weak self] failed in
 			guard let self, retries > 0, self.session === failed else { return false }
@@ -311,7 +337,7 @@ final class AppModel {
 				try? await Task.sleep(for: .seconds(3))
 				// Ended or replaced in the meantime (the user closed the window).
 				guard self.session === failed else { return }
-				let next = self.makeSession(console, keys: keys, ceiling: ceiling, retries: retries - 1)
+				let next = self.makeSession(console, keys: keys, ceiling: ceiling, retries: retries - 1, address: address)
 				self.session = next
 				next.start()
 			}
@@ -418,7 +444,7 @@ final class AppModel {
 		StreamSession.timing.notice("Network ready")
 		// Keep trying for up to 2 minutes. The console holds on to the lost stream for a while (it never
 		// heard it end) and ignores new requests until it lets go, so an unanswered request is
-		// abandoned after 12 s and made again, rather than waiting out libchiaki's 30 s.
+		// abandoned after 8 s and made again, rather than waiting out libchiaki's 30 s.
 		let deadline = ContinuousClock.now + .seconds(120)
 		var attempt = 0
 		// Tries in a row that reached the console but couldn't open a direct connection to it.
@@ -448,8 +474,8 @@ final class AppModel {
 				if s.internetStep == CW_PSN_STEP_CONSOLE {
 					let since = waitingSince ?? ContinuousClock.now
 					waitingSince = since
-					if ContinuousClock.now - since > .seconds(12) {
-						StreamSession.timing.notice("Console didn’t answer in 12 s; asking again")
+					if ContinuousClock.now - since > .seconds(8) {
+						StreamSession.timing.notice("Console didn’t answer in 8 s; asking again")
 						break
 					}
 				} else {

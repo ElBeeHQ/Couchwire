@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Play on mobile data, with port forwarding.** Some mobile networks block internet play (Sony's app too). If you forward the PS5's ports on your home router, enter your home's address under **Away from Home** in the console's settings, and Couchwire connects straight to it, waking the PS5 first.
+- **Setup asks for the PS button.** When a controller is connected during setup, macOS asks whether Couchwire can respond to the PS button, and setup explains to click Allow.
+
+### Changed
+
+- A tidier **About Couchwire** window.
+- While connecting over the internet, Couchwire keeps libchiaki's detailed connection log, so slow or failed connections can be looked into. It asks a busy PS5 again after 8 seconds instead of 12.
+
 ## v0.2.1: The PS button, and a tidier Settings
 
 *23 November 2026*

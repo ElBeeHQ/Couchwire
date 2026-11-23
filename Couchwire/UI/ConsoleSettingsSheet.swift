@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Per-console preferences: stream quality, waking from rest mode and full screen.
+/// Per-console preferences: stream quality, waking from rest mode, full screen, and an address for away from home.
 struct ConsoleSettingsSheet: View {
 	@Environment(AppModel.self) private var model
 	@Environment(\.dismiss) private var dismiss
@@ -32,6 +32,17 @@ struct ConsoleSettingsSheet: View {
 				Section("When Connecting") {
 					Toggle("Wake from Rest Mode", isOn: $profile.autoWake)
 					Toggle("Open in Full Screen", isOn: $profile.autoFullScreen)
+				}
+				Section {
+					TextField("Address", text: $profile.awayAddress, prompt: Text("e.g. myhome.duckdns.org"))
+						.autocorrectionDisabled()
+				} header: {
+					Text("Away from Home")
+				} footer: {
+					Text("For networks where internet play can’t connect, such as mobile data. Enter your home’s public address or a dynamic DNS name, and forward these ports on your router to the PS5: 9295 TCP and UDP, and 9296, 9297 and 9302 UDP. Away from home, Couchwire then connects straight to this address instead of through PlayStation Network. Leave it empty to use internet play.")
+						.font(.caption)
+						.foregroundStyle(.secondary)
+						.fixedSize(horizontal: false, vertical: true)
 				}
 			}
 			.formStyle(.grouped)

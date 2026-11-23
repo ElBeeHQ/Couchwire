@@ -66,6 +66,18 @@ Needs macOS 14 or later on Apple silicon, a PS5, and a PlayStation Network accou
 network; after that you can also play over the internet. Most VPNs block internet play. A wired
 connection on both the Mac and the PS5 gives the smoothest picture.
 
+## Playing on mobile data
+
+Internet play needs a direct connection between your Mac and your PS5, and some mobile networks don't allow one (Sony's
+own app fails there too). You can get round it with port forwarding:
+
+1. On your home router, forward these ports to your PS5: 9295 TCP and UDP, and 9296, 9297 and 9302 UDP. It helps to
+   give the PS5 a fixed address on your network first.
+2. Find your home's public address, or set up a free dynamic DNS name so it doesn't matter when the address changes.
+3. In Couchwire, open the console's settings and enter that address under **Away from Home**.
+
+Away from home, Couchwire then connects straight to that address instead of through PlayStation Network.
+
 ## Tips for the lowest latency
 
 - Connect both the Mac and the PS5 with Ethernet if you can. Wi-Fi adds jitter and lost frames.

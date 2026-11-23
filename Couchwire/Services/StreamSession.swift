@@ -45,6 +45,10 @@ final class StreamSession {
 	let settings: StreamSettings
 	/// The kind of connection, for automatic quality.
 	let link: ConnectionQuality.Link
+	/// On the home network, as opposed to over the internet (through PSN or straight to an address).
+	var isHome: Bool { link == .homeWired || link == .homeWireless }
+	/// Set when connecting straight to an address away from home: said when the console can't be reached.
+	var unreachableHint: String?
 	/// Whether automatic quality chose `settings` (and learns from this session).
 	let automaticQuality: Bool
 	/// How frames are smoothed out before showing. Changing it applies straight away.
@@ -87,6 +91,7 @@ final class StreamSession {
 		self.internet = internet
 		self.settings = settings
 		self.link = link
+		let home = link == .homeWired || link == .homeWireless
 		self.automaticQuality = automaticQuality
 		self.smoothing = smoothing
 		// Frames carry host-clock times to show at, so the layer's clock must be the host clock. Always
@@ -96,7 +101,7 @@ final class StreamSession {
 			try? timebase.setRate(1)
 			displayLayer.controlTimebase = timebase
 			pacer = FramePacer(fps: settings.fps, maxHold: FramePacer.maxHold(for: link), mode: smoothing.resolved(for: link),
-								 home: internet == nil)
+								 home: home)
 		} else {
 			pacer = nil
 		}
@@ -115,9 +120,9 @@ final class StreamSession {
 								  pacer: pacer),
 			stats: collector)
 		media.owner = self
-		media.audio.minimumLatency = internet == nil ? 0.02 : 0.06
+		media.audio.minimumLatency = home ? 0.02 : 0.06
 		media.audio.maximumLatency = link == .internetMobile ? 0.25 : 0.15
-		media.audio.fastRecovery = internet == nil
+		media.audio.fastRecovery = home
 
 		var cfg = CWSessionConfig()
 		// Kept until cw_session_create returns; libchiaki copies what it needs.
@@ -241,6 +246,7 @@ final class StreamSession {
 		if internet != nil {
 			// Finding the console through PSN and opening a connection blocks for up to a minute.
 			startedAt = CACurrentMediaTime()
+			keepCoreLog = true
 			Self.timing.notice("Internet connect started")
 			internetStep = CW_PSN_STEP_ROUTER
 			connecting.enter()
@@ -275,6 +281,7 @@ final class StreamSession {
 
 	private func internetConnectFinished(_ err: Int32) {
 		guard err != 0, phase == .connecting else { return }
+		keepCoreLog = false
 		Self.timing.notice("Internet connect failed with \(err, privacy: .public) after \(self.elapsed, privacy: .public) s")
 		couldNotPunch = err == CW_ERR_HOST_UNREACH
 		let name = console.nickname
@@ -285,7 +292,7 @@ final class StreamSession {
 		case CW_ERR_HOST_UNREACH where PathWatcher.shared.usesVPN:
 			"Couldn’t open a connection to \(name) while a VPN is on. Most VPNs block the direct connection Remote Play needs. Turn the VPN off, or exclude Couchwire from it, then try again."
 		case CW_ERR_HOST_UNREACH where internet?.forcePortGuessing == true:
-			"This network doesn’t allow a direct connection to \(name). Some mobile networks block it, for Sony’s own Remote Play app too. Try Wi-Fi or a different hotspot."
+			"This network doesn’t allow a direct connection to \(name). Some mobile networks block it, for Sony’s own Remote Play app too. Try Wi-Fi or a different hotspot, or set up an away-from-home address in \(name)’s settings."
 		case CW_ERR_HOST_UNREACH:
 			"Couldn’t open a connection to \(name) through these networks. Turn on “Try harder on difficult networks” in Settings › Account, or try another network."
 		default:
@@ -341,11 +348,12 @@ final class StreamSession {
 	}
 
 	private func didConnect() {
-		Self.timing.notice("Streaming after \(self.elapsed, privacy: .public) s (\(self.internet == nil ? "home" : "internet", privacy: .public))")
+		keepCoreLog = false
+		Self.timing.notice("Streaming after \(self.elapsed, privacy: .public) s (\(self.internet != nil ? "internet" : self.isHome ? "home" : "direct", privacy: .public))")
 		phase = .streaming
 		startStatsTimer()
 		// The live ping goes to the console's home address, which only answers on the home network.
-		if internet == nil {
+		if isHome {
 			let collector = statsCollector
 			pinger = ConsolePinger(address: console.lastAddress) { collector.ping($0) }
 			pinger?.start()
@@ -368,6 +376,7 @@ final class StreamSession {
 	@ObservationIgnored var retryWhenNotReady: ((StreamSession) -> Bool)?
 
 	private func didQuit(reason: Int32, error: String?) {
+		keepCoreLog = false
 		Self.timing.notice("Quit with reason \(reason, privacy: .public) after \(self.elapsed, privacy: .public) s: \(error ?? "no error", privacy: .public)")
 		// The connection broke just after the Mac changed network: reconnect rather than show an error.
 		if phase == .streaming, error != nil, PathWatcher.shared.secondsSinceChange < 30, onConnectionLost != nil, !lostReported {
@@ -381,6 +390,8 @@ final class StreamSession {
 		var error = error
 		if reason == 13 { // PSN_REGIST_FAILED
 			error = "\(console.nickname) didn’t accept this Mac over the internet. Make sure you signed in to Internet Play with the PSN account you use on it."
+		} else if phase == .connecting, Self.notReadyReasons.contains(reason), let hint = unreachableHint {
+			error = hint
 		} else if phase == .connecting, Self.notReadyReasons.contains(reason) {
 			error = "\(console.nickname) isn’t ready to stream yet. Wait a moment, then press Play again."
 		}

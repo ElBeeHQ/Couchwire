@@ -60,6 +60,9 @@ struct ConsoleProfile: Codable, Hashable, Sendable {
 	var customStream: StreamSettings?
 	var autoWake = true
 	var autoFullScreen = false
+	/// Where to reach the console directly when away from home: the home's public address or a
+	/// dynamic DNS name, with the PS5's ports forwarded on the router. Empty to use PSN instead.
+	var awayAddress = ""
 
 	init() {}
 
@@ -69,6 +72,7 @@ struct ConsoleProfile: Codable, Hashable, Sendable {
 		customStream = try c.decodeIfPresent(StreamSettings.self, forKey: .customStream)
 		autoWake = try c.decodeIfPresent(Bool.self, forKey: .autoWake) ?? true
 		autoFullScreen = try c.decodeIfPresent(Bool.self, forKey: .autoFullScreen) ?? false
+		awayAddress = try c.decodeIfPresent(String.self, forKey: .awayAddress) ?? ""
 	}
 }
 

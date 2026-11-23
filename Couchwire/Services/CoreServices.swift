@@ -9,9 +9,14 @@ func logFromCore(_ level: Int32, _ msg: UnsafePointer<CChar>?) {
 	switch level {
 	case Int32(CW_LOG_ERROR.rawValue): coreLog.error("\(s, privacy: .public)")
 	case Int32(CW_LOG_WARNING.rawValue): coreLog.warning("\(s, privacy: .public)")
-	default: coreLog.info("\(s, privacy: .public)")
+	default:
+		// Kept (notice) while an internet connection is being set up, so slow ones can be looked into.
+		if keepCoreLog { coreLog.notice("\(s, privacy: .public)") } else { coreLog.info("\(s, privacy: .public)") }
 	}
 }
+
+/// On while an internet connection is being set up. A plain flag: an off-by-one log line doesn't matter.
+nonisolated(unsafe) var keepCoreLog = false
 
 let cLog: CWLogCallback = { level, msg, _ in logFromCore(level, msg) }
 
