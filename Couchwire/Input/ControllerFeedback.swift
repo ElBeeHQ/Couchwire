@@ -21,6 +21,10 @@ final class ControllerFeedback: @unchecked Sendable {
 	var countsReports: Bool { hid != nil }
 	private var keepaliveTicks = 0
 	private var reconnectAfter: CFTimeInterval = 0
+	/// USB: keep looking for the controller's audio device until this time. macOS sets it
+	/// up a moment after the HID device, so it's often missing right after a plug-in.
+	private var usbHapticsRetryUntil: CFTimeInterval = 0
+	private static let usbHapticsRetryWindow: CFTimeInterval = 15
 	/// PS5 defaults until the console says otherwise: player 1 blue.
 	private var lightbar: (UInt8, UInt8, UInt8) = (0, 0, 64)
 	/// Mute-button light, as the PS5 uses it: on while the mic is muted.
@@ -58,8 +62,10 @@ final class ControllerFeedback: @unchecked Sendable {
 			guard let self else { return }
 			queue.async { self.devicesChanged() }
 		}
+		usbHapticsRetryUntil = 0
 		if hid?.isBluetooth == false {
 			if usbHaptics == nil { usbHaptics = DualSenseUSBHaptics.makeIfConnected() }
+			if usbHaptics == nil { usbHapticsRetryUntil = CACurrentMediaTime() + Self.usbHapticsRetryWindow }
 		} else {
 			usbHaptics?.stop()
 			usbHaptics = nil
@@ -67,8 +73,39 @@ final class ControllerFeedback: @unchecked Sendable {
 		lastSentRumble = (0, 0)
 		applyLights()
 		hid?.setMuteLight(muteLight)
-		log.info("DualSense feedback: triggers via \(self.hid == nil ? "GameController (fallback)" : (self.hid!.isBluetooth ? "HID over Bluetooth" : "HID over USB"), privacy: .public), haptics via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
+		logRoute()
 		applyTriggers()
+	}
+
+	private func logRoute() {
+		log.info("DualSense feedback: triggers via \(self.hid == nil ? "GameController (fallback)" : (self.hid!.isBluetooth ? "HID over Bluetooth" : "HID over USB"), privacy: .public), haptics via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
+	}
+
+	/// Over USB with no voice-coil haptics yet: try the controller's audio device again.
+	/// Until it appears, haptics play as HID rumble as on Bluetooth.
+	private func retryUSBHaptics() {
+		guard usbHapticsRetryUntil > 0, usbHaptics == nil, let hid, !hid.isBluetooth else {
+			usbHapticsRetryUntil = 0
+			return
+		}
+		guard let usb = DualSenseUSBHaptics.makeIfConnected() else {
+			if CACurrentMediaTime() >= usbHapticsRetryUntil {
+				usbHapticsRetryUntil = 0
+				log.info("DualSense audio device not found over USB; haptics stay on HID rumble")
+			}
+			return
+		}
+		usbHapticsRetryUntil = 0
+		// Hand over from HID rumble: stop the motors now, since the envelope no longer
+		// updates or decays once frames go to the voice coils.
+		envelope = (0, 0)
+		resetEnvelopeWindow()
+		if lastSentRumble != (0, 0) {
+			lastSentRumble = (0, 0)
+			hid.setRumble(left: 0, right: 0)
+		}
+		usbHaptics = usb
+		logRoute()
 	}
 
 	/// The old HID handle is dead (unplugged, or moved between Bluetooth and USB). Drop it;
@@ -77,6 +114,7 @@ final class ControllerFeedback: @unchecked Sendable {
 		hid = nil
 		usbHaptics?.stop()
 		usbHaptics = nil
+		usbHapticsRetryUntil = 0
 		reconnectAfter = CACurrentMediaTime() + 0.5
 	}
 
@@ -90,6 +128,7 @@ final class ControllerFeedback: @unchecked Sendable {
 		motors = nil
 		usbHaptics?.stop()
 		usbHaptics = nil
+		usbHapticsRetryUntil = 0
 		decayTimer?.cancel()
 		decayTimer = nil
 		controller = nil
@@ -199,6 +238,9 @@ final class ControllerFeedback: @unchecked Sendable {
 				reconnectAfter = CACurrentMediaTime() + 1 // retry every second until it's back
 				connectDevices()
 				if hid != nil { reconnectAfter = 0 }
+			}
+			if usbHapticsRetryUntil > 0, keepaliveTicks % 20 == 0 { // about once a second
+				retryUSBHaptics()
 			}
 			// Trigger effects are not re-sent on a timer: re-sending restarts vibrating effects
 			// and re-arms weapon clicks mid-pull. They're re-applied on reconnect instead.
