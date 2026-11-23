@@ -112,7 +112,16 @@ final class DualSenseHID: @unchecked Sendable {
 		effects[0] = 0x04 | 0x08 // valid flags: right + left trigger effects
 		for i in 0..<min(11, right.count) { effects[10 + i] = right[i] }
 		for i in 0..<min(11, left.count) { effects[21 + i] = left[i] }
+		Self.setMotorPower(&effects)
 		send(effects: effects)
+	}
+
+	/// The console's Trigger Effect Intensity setting, as the controller's own trigger-force
+	/// reduction (high nibble of the motor power byte), the way chiaki-ng sends it. Rumble is
+	/// scaled before it gets here, so the low nibble stays 0 (no rumble reduction).
+	private static func setMotorPower(_ effects: inout [UInt8]) {
+		effects[1] |= 0x40         // valid flag 1: motor power level
+		effects[36] = cw_feedback_trigger_reduction() & 0xF0
 	}
 
 	/// Rumble-emulation motor levels (0...255). Over Bluetooth this is how the console's
@@ -124,8 +133,23 @@ final class DualSenseHID: @unchecked Sendable {
 		effects[2] = right         // high-frequency (right) motor
 		effects[3] = left          // low-frequency (left) motor
 		effects[38] = 0x04         // valid flag 3: improved rumble emulation
-		send(effects: effects)
+		Self.setMotorPower(&effects)
+		// Latest level wins: if Bluetooth is slow, skip stale levels rather than queueing
+		// them, so rumble never falls behind the game (and input reports aren't held up).
+		queue.async { [self] in
+			let alreadyQueued = pendingRumble != nil
+			pendingRumble = effects
+			if alreadyQueued { return }
+			queue.async { [self] in
+				guard let latest = pendingRumble else { return }
+				pendingRumble = nil
+				write(effects: latest)
+			}
+		}
 	}
+
+	/// Rumble report waiting to go out; only touched on `queue`.
+	private var pendingRumble: [UInt8]?
 
 	/// The orange light on the mute button: 0 off, 1 on, 2 pulsing.
 	func setMuteLight(_ mode: UInt8) {
@@ -147,29 +171,32 @@ final class DualSenseHID: @unchecked Sendable {
 	}
 
 	private func send(effects: [UInt8]) {
-		queue.async { [self] in
-			var report: [UInt8]
-			if isBluetooth {
-				report = [UInt8](repeating: 0, count: 78)
-				report[0] = 0x31 // Bluetooth output report
-				report[1] = 0x00 // tag / sequence
-				report[2] = 0x10 // magic
-				for (i, b) in effects.enumerated() { report[3 + i] = b }
-				// CRC32 over the HID-P header byte 0xA2 + report bytes 0..<74, little-endian.
-				var crc = CRC32.update(0, [0xA2])
-				crc = CRC32.update(crc, report[0..<74])
-				withUnsafeBytes(of: crc.littleEndian) { for i in 0..<4 { report[74 + i] = $0[i] } }
-			} else {
-				report = [0x02] + effects // USB output report
-			}
-			let result = report.withUnsafeBufferPointer {
-				IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, CFIndex(report[0]), $0.baseAddress!, $0.count)
-			}
-			if result != kIOReturnSuccess, !failed {
-				failed = true
-				log.error("DualSense output report failed (\(result)); reconnecting")
-				onFailure?()
-			}
+		queue.async { [self] in write(effects: effects) }
+	}
+
+	/// Builds and sends one output report. Runs on `queue`.
+	private func write(effects: [UInt8]) {
+		var report: [UInt8]
+		if isBluetooth {
+			report = [UInt8](repeating: 0, count: 78)
+			report[0] = 0x31 // Bluetooth output report
+			report[1] = 0x00 // tag / sequence
+			report[2] = 0x10 // magic
+			for (i, b) in effects.enumerated() { report[3 + i] = b }
+			// CRC32 over the HID-P header byte 0xA2 + report bytes 0..<74, little-endian.
+			var crc = CRC32.update(0, [0xA2])
+			crc = CRC32.update(crc, report[0..<74])
+			withUnsafeBytes(of: crc.littleEndian) { for i in 0..<4 { report[74 + i] = $0[i] } }
+		} else {
+			report = [0x02] + effects // USB output report
+		}
+		let result = report.withUnsafeBufferPointer {
+			IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, CFIndex(report[0]), $0.baseAddress!, $0.count)
+		}
+		if result != kIOReturnSuccess, !failed {
+			failed = true
+			log.error("DualSense output report failed (\(result)); reconnecting")
+			onFailure?()
 		}
 	}
 }

@@ -198,6 +198,9 @@ int cw_session_stop(CWSession *session);
 /// Blocks until the session thread exits, then frees everything.
 void cw_session_free(CWSession *session);
 int cw_session_set_controller(CWSession *session, const CWControllerState *state);
+/// Adaptive-trigger force reduction to put in DualSense output reports (the high nibble of
+/// the motor power byte), following the console's Trigger Effect Intensity setting.
+uint8_t cw_feedback_trigger_reduction(void);
 
 /// Internet play: finds the console through PSN, opens a connection to it and starts the session
 /// (so don't also call cw_session_start). Blocks for up to a minute or more; call it off the main

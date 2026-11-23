@@ -95,6 +95,7 @@ final class ControllerFeedback: @unchecked Sendable {
 		controller = nil
 		rumble = (0, 0)
 		envelope = (0, 0)
+		resetEnvelopeWindow()
 	}
 
 	// MARK: Rumble (non-DualSense games, or DualSense games that don't use haptics)
@@ -120,21 +121,44 @@ final class ControllerFeedback: @unchecked Sendable {
 		}
 	}
 
+	/// Haptic packets averaged into one rumble level (3 × 10 ms, as chiaki-ng does), which
+	/// smooths network jitter and keeps Bluetooth to about 33 rumble reports a second.
+	private static let packetsPerLevel = 3
+	/// Below this the haptic signal is a faint voice-coil texture, not something to rumble
+	/// for (chiaki-ng's HAPTIC_RUMBLE_MIN_STRENGTH, on a 0...1 scale).
+	private static let envelopeFloor: Float = 100 / 65536
+	private var envelopeSum: (Float, Float) = (0, 0)
+	private var envelopeSamples = 0
+	private var envelopePackets = 0
+
 	/// Bluetooth: no raw haptic channel, so drive rumble emulation from the signal envelope.
+	/// Scaled like chiaki-ng's "Normal" haptics-to-rumble: twice the mean absolute level.
 	private func pushEnvelope(_ pcm: [Int16], frames: Int) {
-		var sumL: Float = 0, sumR: Float = 0
 		for i in 0..<frames {
-			let l = Float(pcm[2 * i]) / 32768, r = Float(pcm[2 * i + 1]) / 32768
-			sumL += l * l
-			sumR += r * r
+			envelopeSum.0 += abs(Float(pcm[2 * i]))
+			envelopeSum.1 += abs(Float(pcm[2 * i + 1]))
 		}
-		let n = Float(max(frames, 1))
-		// RMS → perceptual intensity. Haptic signals are fairly quiet; boost and soft-clip.
-		let left = min(1, (sumL / n).squareRoot() * 2.5)
-		let right = min(1, (sumR / n).squareRoot() * 2.5)
+		envelopeSamples += frames
+		envelopePackets += 1
+		guard envelopePackets >= Self.packetsPerLevel else { return }
+		let n = Float(max(envelopeSamples, 1)) * 32768
+		var left = min(1, envelopeSum.0 / n * 2), right = min(1, envelopeSum.1 / n * 2)
+		resetEnvelopeWindow()
+		if left <= Self.envelopeFloor { left = 0 }
+		if right <= Self.envelopeFloor { right = 0 }
+		// The weakest level the motors actually turn at, as chiaki-ng does.
+		let minimum: Float = 2 / 255
+		if left > 0 { left = max(left, minimum) }
+		if right > 0 { right = max(right, minimum) }
 		hapticPeak = max(hapticPeak, max(left, right))
 		envelope = (left, right)
 		applyMotors()
+	}
+
+	private func resetEnvelopeWindow() {
+		envelopeSum = (0, 0)
+		envelopeSamples = 0
+		envelopePackets = 0
 	}
 
 	private var lastSentRumble: (UInt8, UInt8) = (0, 0)
@@ -149,10 +173,9 @@ final class ControllerFeedback: @unchecked Sendable {
 			return
 		}
 		// Direct HID rumble: only send when the level actually changes, to keep the
-		// Bluetooth link quiet (haptic frames arrive 100 times a second).
+		// Bluetooth link quiet. Haptic levels arrive every 30 ms at most.
 		let l = UInt8(min(255, left * 255)), r = UInt8(min(255, right * 255))
-		let changed = abs(Int(l) - Int(lastSentRumble.0)) > 2 || abs(Int(r) - Int(lastSentRumble.1)) > 2
-		if changed || ((l == 0 && r == 0) && lastSentRumble != (0, 0)) {
+		if (l, r) != lastSentRumble {
 			lastSentRumble = (l, r)
 			hid.setRumble(left: l, right: r)
 		}
@@ -165,8 +188,6 @@ final class ControllerFeedback: @unchecked Sendable {
 		t.schedule(deadline: .now() + 0.05, repeating: 0.05)
 		t.setEventHandler { [weak self] in
 			guard let self else { return }
-			// Re-send active trigger effects every second in case another output report
-			// (e.g. from the system's own controller driver) reset them.
 			keepaliveTicks += 1
 			if keepaliveTicks % 100 == 0 { // every 5 s
 				log.info("Haptics: \(self.hapticFrames) frames in 5 s, peak \(self.hapticPeak, format: .fixed(precision: 2)), via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
@@ -179,10 +200,11 @@ final class ControllerFeedback: @unchecked Sendable {
 				connectDevices()
 				if hid != nil { reconnectAfter = 0 }
 			}
-			if keepaliveTicks % 20 == 0, let hid, rawTriggers != (Self.rawOff, Self.rawOff) {
-				hid.setTriggers(left: rawTriggers.left, right: rawTriggers.right)
-			}
-			guard usbHaptics == nil, envelope != (0, 0), CACurrentMediaTime() - lastHapticFrame > 0.06 else { return }
+			// Trigger effects are not re-sent on a timer: re-sending restarts vibrating effects
+			// and re-arms weapon clicks mid-pull. They're re-applied on reconnect instead.
+			guard usbHaptics == nil, CACurrentMediaTime() - lastHapticFrame > 0.06 else { return }
+			if envelopePackets > 0 { resetEnvelopeWindow() }
+			guard envelope != (0, 0) else { return }
 			envelope = (0, 0)
 			applyMotors()
 		}

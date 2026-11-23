@@ -13,6 +13,7 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -292,7 +293,35 @@ struct CWSession {
 	ChiakiHolepunchSession holepunch;
 	uint8_t psn_duid[32];
 	bool psn_skip_upnp;
+	/// The console's Vibration Intensity setting as a gain for rumble and haptics (0 = off).
+	_Atomic float feedback_gain;
+	/// The console's Trigger Effect Intensity setting is Off.
+	bool triggers_off;
+	/// Last trigger effects from the console, re-sent when the trigger intensity changes.
+	bool have_triggers;
+	uint8_t trigger_type_left, trigger_type_right;
+	uint8_t trigger_left[10], trigger_right[10];
 };
+
+/// DualSense trigger-force reduction (high nibble of the output report's motor power byte),
+/// as chiaki-ng sets it. One stream runs at a time, and it's a console-wide setting.
+static _Atomic uint8_t trigger_reduction = 0;
+
+uint8_t cw_feedback_trigger_reduction(void)
+{
+	return atomic_load(&trigger_reduction);
+}
+
+static void emit_triggers(CWSession *s)
+{
+	if(!s->cb.trigger_effects || !s->have_triggers)
+		return;
+	static const uint8_t off[10] = {0};
+	if(s->triggers_off)
+		s->cb.trigger_effects(0x05, off, 0x05, off, s->cb.user);
+	else
+		s->cb.trigger_effects(s->trigger_type_left, s->trigger_left, s->trigger_type_right, s->trigger_right, s->cb.user);
+}
 
 _Static_assert(CW_ERR_CANCELED == CHIAKI_ERR_CANCELED, "CW_ERR_CANCELED");
 _Static_assert(CW_ERR_HOST_DOWN == CHIAKI_ERR_HOST_DOWN, "CW_ERR_HOST_DOWN");
@@ -319,13 +348,52 @@ static void session_event_cb(ChiakiEvent *event, void *user)
 			break;
 		case CHIAKI_EVENT_RUMBLE:
 			if(s->cb.rumble)
-				s->cb.rumble(event->rumble.left, event->rumble.right, s->cb.user);
+			{
+				float gain = atomic_load(&s->feedback_gain);
+				s->cb.rumble((uint8_t)(event->rumble.left * gain), (uint8_t)(event->rumble.right * gain), s->cb.user);
+			}
 			break;
 		case CHIAKI_EVENT_TRIGGER_EFFECTS:
-			if(s->cb.trigger_effects)
-				s->cb.trigger_effects(event->trigger_effects.type_left, event->trigger_effects.left,
-						event->trigger_effects.type_right, event->trigger_effects.right, s->cb.user);
+			s->trigger_type_left = event->trigger_effects.type_left;
+			s->trigger_type_right = event->trigger_effects.type_right;
+			memcpy(s->trigger_left, event->trigger_effects.left, 10);
+			memcpy(s->trigger_right, event->trigger_effects.right, 10);
+			s->have_triggers = true;
+			emit_triggers(s);
 			break;
+		case CHIAKI_EVENT_HAPTIC_INTENSITY:
+		{
+			// Same steps as chiaki-ng: the PS5's Strong / Medium / Weak / Off.
+			float gain = 1.0f;
+			switch(event->intensity)
+			{
+				case Off: gain = 0.0f; break;
+				case Weak: gain = 0.33f; break;
+				case Medium: gain = 0.5f; break;
+				case Strong: default: gain = 1.0f; break;
+			}
+			atomic_store(&s->feedback_gain, gain);
+			CHIAKI_LOGI(&s->log, "Vibration intensity gain %.2f", gain);
+			if(gain == 0.0f && s->cb.rumble)
+				s->cb.rumble(0, 0, s->cb.user);
+			break;
+		}
+		case CHIAKI_EVENT_TRIGGER_INTENSITY:
+		{
+			uint8_t reduction = 0x00;
+			switch(event->intensity)
+			{
+				case Off: reduction = 0x00; break;
+				case Weak: reduction = 0x90; break;
+				case Medium: reduction = 0x60; break;
+				case Strong: default: reduction = 0x00; break;
+			}
+			atomic_store(&trigger_reduction, reduction);
+			s->triggers_off = event->intensity == Off;
+			CHIAKI_LOGI(&s->log, "Trigger intensity: reduction 0x%02x%s", reduction, s->triggers_off ? ", off" : "");
+			emit_triggers(s);
+			break;
+		}
 		case CHIAKI_EVENT_LED_COLOR:
 			if(s->cb.led_color)
 				s->cb.led_color(event->led_state[0], event->led_state[1], event->led_state[2], s->cb.user);
@@ -370,6 +438,12 @@ static void haptics_frame_cb(uint8_t *buf, size_t buf_size, void *user)
 	if(frames > sizeof(pcm) / frame_bytes)
 		frames = sizeof(pcm) / frame_bytes;
 	memcpy(pcm, buf, frames * frame_bytes);
+	float gain = atomic_load(&s->feedback_gain);
+	if(gain <= 0.0f)
+		return;
+	if(gain < 1.0f)
+		for(size_t i = 0; i < frames * 2; i++)
+			pcm[i] = (int16_t)(pcm[i] * gain);
 	s->cb.haptics(pcm, frames, s->cb.user);
 }
 
@@ -397,6 +471,8 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 		return NULL;
 	}
 	s->cb = callbacks;
+	atomic_init(&s->feedback_gain, 1.0f);
+	atomic_store(&trigger_reduction, 0);
 	s->log_fwd.cb = callbacks.log;
 	s->log_fwd.user = callbacks.user;
 	chiaki_log_init(&s->log, CW_LOG_MASK, log_forward, &s->log_fwd);
