@@ -196,10 +196,13 @@ final class StreamSession {
 			}
 			_ = cw_session_mic_set_muted(h, false)
 			micOn = true
+			input?.muteLight(false)
 		} else {
 			media.audio.setMicrophone(false)
 			_ = cw_session_mic_set_muted(h, true)
 			micOn = false
+			// Orange means muted, like on a PS5. Left dark until the mic has been used.
+			input?.muteLight(true)
 		}
 	}
 

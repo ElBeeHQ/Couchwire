@@ -23,6 +23,8 @@ final class ControllerFeedback: @unchecked Sendable {
 	private var reconnectAfter: CFTimeInterval = 0
 	/// PS5 defaults until the console says otherwise: player 1 blue.
 	private var lightbar: (UInt8, UInt8, UInt8) = (0, 0, 64)
+	/// Mute-button light, as the PS5 uses it: on while the mic is muted.
+	private var muteLight: UInt8 = 0
 	private var playerLEDs: UInt8 = 0x04
 	private var hapticFrames = 0
 	private var hapticPeak: Float = 0
@@ -64,6 +66,7 @@ final class ControllerFeedback: @unchecked Sendable {
 		}
 		lastSentRumble = (0, 0)
 		applyLights()
+		hid?.setMuteLight(muteLight)
 		log.info("DualSense feedback: triggers via \(self.hid == nil ? "GameController (fallback)" : (self.hid!.isBluetooth ? "HID over Bluetooth" : "HID over USB"), privacy: .public), haptics via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
 		applyTriggers()
 	}
@@ -79,6 +82,7 @@ final class ControllerFeedback: @unchecked Sendable {
 
 	func detach() {
 		resetTriggers()
+		hid?.setMuteLight(0)
 		hid?.setRumble(left: 0, right: 0)
 		lastSentRumble = (0, 0)
 		hid = nil
@@ -191,6 +195,11 @@ final class ControllerFeedback: @unchecked Sendable {
 	func setLightbar(r: UInt8, g: UInt8, b: UInt8) {
 		lightbar = (r, g, b)
 		applyLights()
+	}
+
+	func setMuteLight(_ on: Bool) {
+		muteLight = on ? 1 : 0
+		hid?.setMuteLight(muteLight)
 	}
 
 	func setPlayerIndex(_ index: UInt8) {

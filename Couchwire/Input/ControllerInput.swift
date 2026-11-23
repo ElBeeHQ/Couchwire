@@ -120,6 +120,11 @@ final class ControllerInput: @unchecked Sendable {
 		queue.async { self.feedback.setLightbar(r: r, g: g, b: b) }
 	}
 
+	/// Lights the controller's mute button while the mic is muted.
+	func muteLight(_ on: Bool) {
+		queue.async { self.feedback.setMuteLight(on) }
+	}
+
 	func playerIndex(_ index: UInt8) {
 		log.info("Player index \(index)")
 		queue.async { self.feedback.setPlayerIndex(index) }

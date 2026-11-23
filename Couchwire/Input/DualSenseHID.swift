@@ -127,6 +127,14 @@ final class DualSenseHID: @unchecked Sendable {
 		send(effects: effects)
 	}
 
+	/// The orange light on the mute button: 0 off, 1 on, 2 pulsing.
+	func setMuteLight(_ mode: UInt8) {
+		var effects = [UInt8](repeating: 0, count: 47)
+		effects[1] = 0x01          // valid flag 1: mic mute LED
+		effects[8] = mode
+		send(effects: effects)
+	}
+
 	/// Lightbar colour and player-indicator LEDs.
 	func setLights(r: UInt8, g: UInt8, b: UInt8, playerLEDs: UInt8) {
 		var effects = [UInt8](repeating: 0, count: 47)

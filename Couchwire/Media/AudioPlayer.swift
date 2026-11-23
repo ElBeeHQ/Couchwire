@@ -8,11 +8,8 @@ final class AudioPlayer: @unchecked Sendable {
 	private let engine = AVAudioEngine()
 	private var sourceNode: AVAudioSourceNode?
 	private var ring: PCMRingBuffer?
+	/// Runs on its own engine; see MicrophoneCapture.
 	let microphone = MicrophoneCapture()
-	/// Whether the mic tap (and voice processing) is installed. Once on it stays on for the
-	/// session: switching voice processing back off leaves the engine unable to restart
-	/// (error -10875), which silenced the game. Muting just stops sending.
-	private var micInstalled = false
 	private let log = Logger(subsystem: "Couchwire", category: "Audio")
 
 	var volume: Float {
@@ -52,29 +49,34 @@ final class AudioPlayer: @unchecked Sendable {
 		ring?.write(samples)
 	}
 
-	/// Starts or pauses sending your voice. The first time, voice processing is switched on
-	/// and the engine restarts, so game audio drops out for a moment. Returns whether the
-	/// mic is now live.
+	/// How long the mic keeps running after a mute before the input is released (and the
+	/// orange indicator goes out). Quick mute/unmute within this window is seamless.
+	static let micReleaseDelay: TimeInterval = 30
+	private var micRelease: DispatchWorkItem?
+
+	/// Unmutes (starting the mic if needed) or mutes. Muting drops your voice at once and
+	/// releases the input after `micReleaseDelay`. Main thread only. Returns whether it's live.
 	@discardableResult
 	func setMicrophone(_ on: Bool) -> Bool {
-		if on && !micInstalled {
-			engine.stop()
-			micInstalled = microphone.install(on: engine)
-			do { try engine.start() } catch {
-				log.error("Audio engine failed to restart with the mic: \(error.localizedDescription, privacy: .public)")
-			}
+		micRelease?.cancel()
+		micRelease = nil
+		if on {
+			microphone.muted = false
+			return microphone.start()
 		}
-		microphone.paused = !(on && micInstalled)
-		return on && micInstalled
+		microphone.muted = true
+		let release = DispatchWorkItem { [microphone] in microphone.stop() }
+		micRelease = release
+		DispatchQueue.main.asyncAfter(deadline: .now() + Self.micReleaseDelay, execute: release)
+		return false
 	}
 
 	func stop() {
 		microphone.send = nil
+		micRelease?.cancel()
+		micRelease = nil
+		microphone.stop()
 		engine.stop()
-		if micInstalled {
-			microphone.uninstall(from: engine)
-			micInstalled = false
-		}
 		if let sourceNode {
 			engine.detach(sourceNode)
 		}

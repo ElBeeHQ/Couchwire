@@ -2,14 +2,18 @@ import AVFoundation
 import os
 
 /// Turns the Mac's microphone into the 48 kHz stereo 16-bit frames libchiaki's Opus encoder
-/// wants. It taps the input node of the same engine that plays the game audio, with Apple's
-/// voice processing switched on, so the echo canceller hears the game and removes it from
-/// your voice. Voice processing stays on from the first time the mic is used until the session ends.
+/// wants, through Apple's voice processing (echo cancellation, noise suppression).
+///
+/// It runs on its own engine, started on unmute and released on mute, so muting really stops
+/// the input (and the orange mic indicator). Game audio plays on a separate engine that is
+/// never touched: switching voice processing off on the playback engine left it unable to
+/// restart and silenced the game.
 final class MicrophoneCapture: @unchecked Sendable {
 	static let sampleRate = Double(CW_MIC_SAMPLE_RATE)
 	static let frameSamples = Int(CW_MIC_FRAME_SAMPLES)
 
 	private let log = Logger(subsystem: "Couchwire", category: "Microphone")
+	private var engine: AVAudioEngine?
 	private var converter: AVAudioConverter?
 	private let monoFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
 										   channels: 1, interleaved: false)!
@@ -17,12 +21,14 @@ final class MicrophoneCapture: @unchecked Sendable {
 	private var pending: [Float] = []
 	private var frame = [Int16](repeating: 0, count: frameSamples * 2)
 
-	/// While true, frames are captured but dropped (the mic is muted).
-	var paused: Bool {
-		get { os_unfair_lock_lock(&sendLock); defer { os_unfair_lock_unlock(&sendLock) }; return _paused }
-		set { os_unfair_lock_lock(&sendLock); _paused = newValue; os_unfair_lock_unlock(&sendLock) }
+	/// While true, frames are captured but dropped. Muting sets this straight away and only
+	/// releases the input later, because starting or stopping voice processing makes macOS
+	/// reconfigure the output device, which hiccups the game audio.
+	var muted: Bool {
+		get { os_unfair_lock_lock(&sendLock); defer { os_unfair_lock_unlock(&sendLock) }; return _muted }
+		set { os_unfair_lock_lock(&sendLock); _muted = newValue; os_unfair_lock_unlock(&sendLock) }
 	}
-	private var _paused = true
+	private var _muted = false
 
 	private var sendLock = os_unfair_lock()
 	private var _send: ((UnsafeMutablePointer<Int16>) -> Void)?
@@ -40,8 +46,12 @@ final class MicrophoneCapture: @unchecked Sendable {
 		}
 	}
 
-	/// Starts capturing on `engine`, which must be stopped. Returns false if the input can't be used.
-	func install(on engine: AVAudioEngine) -> Bool {
+	var isRunning: Bool { engine != nil }
+
+	/// Starts capturing. Returns false if the input can't be used.
+	func start() -> Bool {
+		if engine != nil { return true }
+		let engine = AVAudioEngine()
 		let input = engine.inputNode
 		do {
 			try input.setVoiceProcessingEnabled(true)
@@ -66,22 +76,32 @@ final class MicrophoneCapture: @unchecked Sendable {
 		input.installTap(onBus: 0, bufferSize: 480, format: format) { [weak self] buffer, _ in
 			self?.process(buffer)
 		}
+		do {
+			try engine.start()
+		} catch {
+			log.error("Microphone engine failed to start: \(error.localizedDescription, privacy: .public)")
+			input.removeTap(onBus: 0)
+			self.converter = nil
+			return false
+		}
+		self.engine = engine
 		log.info("Microphone on: \(format.channelCount) ch @ \(format.sampleRate) Hz, voice processing")
 		return true
 	}
 
-	/// Stops capturing on `engine`, which must be stopped.
-	func uninstall(from engine: AVAudioEngine) {
-		guard converter != nil else { return }
+	/// Stops capturing and releases the input.
+	func stop() {
+		guard let engine else { return }
+		engine.stop()
 		engine.inputNode.removeTap(onBus: 0)
-		try? engine.inputNode.setVoiceProcessingEnabled(false)
+		self.engine = nil
 		converter = nil
-		paused = true
-		log.info("Microphone removed")
+		log.info("Microphone off")
 	}
 
 	private func process(_ buffer: AVAudioPCMBuffer) {
-		guard let converter, !paused else { pending.removeAll(keepingCapacity: true); return }
+		guard let converter else { return }
+		if muted { pending.removeAll(keepingCapacity: true); return }
 		let ratio = monoFormat.sampleRate / buffer.format.sampleRate
 		let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
 		guard let out = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: capacity) else { return }
