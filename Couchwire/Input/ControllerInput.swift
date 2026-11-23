@@ -29,16 +29,10 @@ final class ControllerInput: @unchecked Sendable {
 		return Double(info.numer) / Double(info.denom) / 1_000_000_000
 	}()
 
-	/// PS button and touchpad click as read from the raw HID report. Only touched on `queue`.
+	/// PS button as read from the raw HID report. Only touched on `queue`.
 	private var hidPS = false
-	private var hidTouchpadClick = false
-	/// True once raw reports are arriving, so GameController's touchpad button is ignored.
-	private var hidButtons = false
 	/// Written on the HID queue: the last system-button byte seen there, to act only on change.
 	private var lastSystemButtons: UInt8 = 0
-	private var sawSystemButtons = false
-	private var loggedGCTouchpad = false
-	private var lastLoggedTouch: (Int8, Int8) = (-1, -1)
 	/// Called on the main thread when the controller's mute button is pressed.
 	var onMuteButton: (() -> Void)?
 
@@ -47,28 +41,9 @@ final class ControllerInput: @unchecked Sendable {
 		lastReportMach = timeStamp
 		os_unfair_lock_unlock(&reportLock)
 		stats?.inputReport()
-		guard let buttons = systemButtons else { return }
-		if !sawSystemButtons {
-			sawSystemButtons = true
-			queue.async { [self] in hidButtons = true }
-		}
-		guard buttons != lastSystemButtons else { return }
+		guard let buttons = systemButtons, buttons != lastSystemButtons else { return }
 		let changed = buttons ^ lastSystemButtons
 		lastSystemButtons = buttons
-		log.debug("HID system buttons 0x\(String(buttons, radix: 16), privacy: .public)")
-		if changed & DualSenseHID.touchpadBit != 0 {
-			let click = buttons & DualSenseHID.touchpadBit != 0
-			queue.async { [self] in
-				hidTouchpadClick = click
-				if click {
-					commitPendingTouches()
-					state.buttons |= UInt32(CW_BUTTON_TOUCHPAD)
-				} else {
-					state.buttons &= ~UInt32(CW_BUTTON_TOUCHPAD)
-				}
-				send(state)
-			}
-		}
 		if changed & DualSenseHID.muteBit != 0, buttons & DualSenseHID.muteBit != 0 {
 			DispatchQueue.main.async { [weak self] in self?.onMuteButton?() }
 		}
@@ -239,31 +214,16 @@ final class ControllerInput: @unchecked Sendable {
 		state.right_y = axis(-pad.rightThumbstick.yAxis.value)
 
 		if let ds = pad as? GCDualSenseGamepad {
-			if hidButtons {
-				if hidTouchpadClick { b |= UInt32(CW_BUTTON_TOUCHPAD) }
-			} else {
-				map(ds.touchpadButton, CW_BUTTON_TOUCHPAD)
-			}
-			setTouch(0, ds.touchpadPrimary, clicking: b & UInt32(CW_BUTTON_TOUCHPAD) != 0)
-			setTouch(1, ds.touchpadSecondary, clicking: b & UInt32(CW_BUTTON_TOUCHPAD) != 0)
+			map(ds.touchpadButton, CW_BUTTON_TOUCHPAD)
+			setTouch(0, ds.touchpadPrimary)
+			setTouch(1, ds.touchpadSecondary)
 		} else if let ds4 = pad as? GCDualShockGamepad {
 			map(ds4.touchpadButton, CW_BUTTON_TOUCHPAD)
-			setTouch(0, ds4.touchpadPrimary, clicking: b & UInt32(CW_BUTTON_TOUCHPAD) != 0)
-			setTouch(1, ds4.touchpadSecondary, clicking: b & UInt32(CW_BUTTON_TOUCHPAD) != 0)
+			setTouch(0, ds4.touchpadPrimary)
+			setTouch(1, ds4.touchpadSecondary)
 		}
 
 		if hidPS { b |= UInt32(CW_BUTTON_PS) }
-		if let ds = pad as? GCDualSenseGamepad {
-			let gcTouch = ds.touchpadButton.isPressed
-			if gcTouch != loggedGCTouchpad {
-				loggedGCTouchpad = gcTouch
-				log.debug("GC touchpad button \(gcTouch ? "down" : "up", privacy: .public), HID click \(self.hidTouchpadClick), using HID \(self.hidButtons)")
-			}
-		}
-		if (b ^ state.buttons) & 0xFFFF != 0 || state.touch_id != lastLoggedTouch {
-			lastLoggedTouch = state.touch_id
-			log.debug("Send buttons 0x\(String(b | self.keyboardButtons, radix: 16), privacy: .public) touches \(self.state.touch_id.0) \(self.state.touch_id.1)")
-		}
 		state.buttons = b | keyboardButtons
 		send(state)
 		recordInputTiming(pad)
@@ -293,60 +253,25 @@ final class ControllerInput: @unchecked Sendable {
 
 	private var touchIDs: [Int8] = [-1, -1]
 	private var nextTouchID: Int8 = 0
-	/// Where each finger first landed, while it hasn't been sent to the console yet.
-	private var touchStart: [(x: UInt16, y: UInt16)?] = [nil, nil]
-	/// Latest position of each finger on the pad, sent or not.
-	private var touchPos: [(x: UInt16, y: UInt16)] = [(0, 0), (0, 0)]
-	/// How far (in touchpad units, 1920 × 942) a finger moves before it's sent as a touch.
-	private static let touchSlop = 48
 
-	/// UserDefaults key: send finger positions for swipes. Off by default, because over Remote
-	/// Play the console treats any finger on the pad (still or moving) as a touchpad press.
-	static let touchGesturesKey = "touchpadGestures"
-	private let touchGestures = UserDefaults.standard.bool(forKey: ControllerInput.touchGesturesKey)
-
-	/// With swipes off, a finger is only sent while the pad is clicked, so a click still has a
-	/// position. With swipes on, it's sent once it moves past `touchSlop`, so a still touch
-	/// doesn't read as a press.
-	private func setTouch(_ i: Int, _ pad: GCControllerDirectionPad, clicking: Bool) {
+	/// GameController reports the touchpad as -1...1 on each axis with 0,0 meaning "no touch".
+	private func setTouch(_ i: Int, _ pad: GCControllerDirectionPad) {
 		let x = pad.xAxis.value, y = pad.yAxis.value
-		if x != 0 || y != 0 {
-			let pos = (x: UInt16(clamping: Int((x + 1) / 2 * 1919)), y: UInt16(clamping: Int((1 - (y + 1) / 2) * 941)))
-			touchPos[i] = pos
+		let touching = x != 0 || y != 0
+		if touching {
 			if touchIDs[i] < 0 {
-				let start = touchStart[i] ?? pos
-				touchStart[i] = start
-				let moved = max(abs(Int(pos.x) - Int(start.x)), abs(Int(pos.y) - Int(start.y)))
-				if clicking || (touchGestures && moved >= Self.touchSlop) {
-					commitTouch(i)
-				}
+				touchIDs[i] = nextTouchID
+				nextTouchID = (nextTouchID + 1) & 0x7F
 			}
+			let tx = UInt16(clamping: Int((x + 1) / 2 * 1919))
+			let ty = UInt16(clamping: Int((1 - (y + 1) / 2) * 941))
+			withUnsafeMutablePointer(to: &state.touch_x) { $0.withMemoryRebound(to: UInt16.self, capacity: 2) { $0[i] = tx } }
+			withUnsafeMutablePointer(to: &state.touch_y) { $0.withMemoryRebound(to: UInt16.self, capacity: 2) { $0[i] = ty } }
 		} else {
 			touchIDs[i] = -1
-			touchStart[i] = nil
 		}
-		writeTouch(i)
-	}
-
-	/// Starts sending a finger that's still waiting (on a click, so the press has a position).
-	private func commitPendingTouches() {
-		for i in 0..<2 where touchStart[i] != nil && touchIDs[i] < 0 {
-			commitTouch(i)
-			writeTouch(i)
-		}
-	}
-
-	private func commitTouch(_ i: Int) {
-		touchIDs[i] = nextTouchID
-		nextTouchID = (nextTouchID + 1) & 0x7F
-		touchStart[i] = nil
-	}
-
-	private func writeTouch(_ i: Int) {
-		let id = touchIDs[i], pos = touchPos[i]
+		let id = touchIDs[i]
 		withUnsafeMutablePointer(to: &state.touch_id) { $0.withMemoryRebound(to: Int8.self, capacity: 2) { $0[i] = id } }
-		withUnsafeMutablePointer(to: &state.touch_x) { $0.withMemoryRebound(to: UInt16.self, capacity: 2) { $0[i] = pos.x } }
-		withUnsafeMutablePointer(to: &state.touch_y) { $0.withMemoryRebound(to: UInt16.self, capacity: 2) { $0[i] = pos.y } }
 	}
 
 	private func update(motion m: GCMotion) {

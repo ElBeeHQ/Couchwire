@@ -56,9 +56,6 @@ final class DualSenseHID: @unchecked Sendable {
 	/// Bit 0 of `systemButtons`: PS. macOS keeps it from GameController (it opens the Games
 	/// overlay), so the raw report is the only reliable way to see it.
 	static let psBit: UInt8 = 0x01
-	/// Bit 1 of `systemButtons`: a real click of the touchpad. GameController's touchpadButton
-	/// also reports a light touch as pressed, so the raw bit is used when we have it.
-	static let touchpadBit: UInt8 = 0x02
 	/// Bit 2 of `systemButtons`: the microphone mute button, which GameController doesn't expose.
 	static let muteBit: UInt8 = 0x04
 
