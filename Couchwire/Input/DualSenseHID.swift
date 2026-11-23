@@ -27,12 +27,12 @@ final class DualSenseHID: @unchecked Sendable {
 	/// so it outlives any callback still in flight.
 	private final class InputReports {
 		let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 128)
-		let handler: (UInt64, Bool?) -> Void
-		init(handler: @escaping (UInt64, Bool?) -> Void) { self.handler = handler }
+		let handler: (UInt64, UInt8?) -> Void
+		init(handler: @escaping (UInt64, UInt8?) -> Void) { self.handler = handler }
 		deinit { buffer.deallocate() }
 	}
 
-	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool, onInputReport: ((UInt64, Bool?) -> Void)?) {
+	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool, onInputReport: ((UInt64, UInt8?) -> Void)?) {
 		self.manager = manager
 		self.device = device
 		self.isBluetooth = isBluetooth
@@ -44,7 +44,7 @@ final class DualSenseHID: @unchecked Sendable {
 			IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, reports.buffer, 128, { ctx, _, _, _, reportID, report, length, timeStamp in
 				guard let ctx else { return }
 				Unmanaged<InputReports>.fromOpaque(ctx).takeUnretainedValue()
-					.handler(timeStamp, DualSenseHID.psButton(reportID: reportID, report: report, length: length))
+					.handler(timeStamp, DualSenseHID.systemButtons(reportID: reportID, report: report, length: length))
 			}, context.toOpaque())
 			IOHIDDeviceSetCancelHandler(device) { context.release() }
 			IOHIDDeviceActivate(device)
@@ -53,10 +53,15 @@ final class DualSenseHID: @unchecked Sendable {
 		}
 	}
 
-	/// The PS button straight from the raw input report. macOS keeps it from GameController
-	/// (it opens the Games overlay), so this is the only reliable way to see it.
+	/// Bit 0 of `systemButtons`: PS. macOS keeps it from GameController (it opens the Games
+	/// overlay), so the raw report is the only reliable way to see it.
+	static let psBit: UInt8 = 0x01
+	/// Bit 2 of `systemButtons`: the microphone mute button, which GameController doesn't expose.
+	static let muteBit: UInt8 = 0x04
+
+	/// The PS / touchpad / mute button byte from the raw input report.
 	/// The buffer starts with the report ID. Byte offsets are from the DualSense report layout.
-	static func psButton(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: CFIndex) -> Bool? {
+	static func systemButtons(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: CFIndex) -> UInt8? {
 		let index: Int
 		switch (reportID, length) {
 		case (0x01, 64...): index = 10 // USB
@@ -64,7 +69,7 @@ final class DualSenseHID: @unchecked Sendable {
 		case (0x01, 8...): index = 7   // Bluetooth, basic report
 		default: return nil
 		}
-		return report[index] & 0x01 != 0
+		return report[index]
 	}
 
 	deinit {
@@ -75,7 +80,7 @@ final class DualSenseHID: @unchecked Sendable {
 
 	/// Opens the first connected DualSense, or returns nil. `onInputReport` is called on the
 	/// HID queue for every input report with the kernel's arrival time (mach absolute time).
-	static func open(onInputReport: ((UInt64, Bool?) -> Void)? = nil) -> DualSenseHID? {
+	static func open(onInputReport: ((UInt64, UInt8?) -> Void)? = nil) -> DualSenseHID? {
 		let log = Logger(subsystem: "Couchwire", category: "Feedback")
 		let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
 		let matches = productIDs.map { [kIOHIDVendorIDKey: sonyVendorID, kIOHIDProductIDKey: $0] as CFDictionary }

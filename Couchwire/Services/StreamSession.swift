@@ -152,6 +152,7 @@ final class StreamSession {
 			var s = state
 			_ = cw_session_set_controller(h, &s)
 		}
+		input.onMuteButton = { [weak self] in self?.toggleMicrophone() }
 		self.input = input
 		media.input = input
 		// Keep the system out of App Nap / timer coalescing while streaming.
@@ -190,16 +191,14 @@ final class StreamSession {
 			guard handle == h else { return }
 			media.audio.microphone.send = { cw_session_mic_frame(h, $0) }
 			guard media.audio.setMicrophone(true) else {
-				media.audio.microphone.send = nil
 				micProblem = "Couldn’t use the microphone."
 				return
 			}
 			_ = cw_session_mic_set_muted(h, false)
 			micOn = true
 		} else {
-			_ = cw_session_mic_set_muted(h, true)
 			media.audio.setMicrophone(false)
-			media.audio.microphone.send = nil
+			_ = cw_session_mic_set_muted(h, true)
 			micOn = false
 		}
 	}

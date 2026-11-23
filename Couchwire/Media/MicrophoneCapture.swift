@@ -4,7 +4,7 @@ import os
 /// Turns the Mac's microphone into the 48 kHz stereo 16-bit frames libchiaki's Opus encoder
 /// wants. It taps the input node of the same engine that plays the game audio, with Apple's
 /// voice processing switched on, so the echo canceller hears the game and removes it from
-/// your voice. Voice processing only runs while the mic is on.
+/// your voice. Voice processing stays on from the first time the mic is used until the session ends.
 final class MicrophoneCapture: @unchecked Sendable {
 	static let sampleRate = Double(CW_MIC_SAMPLE_RATE)
 	static let frameSamples = Int(CW_MIC_FRAME_SAMPLES)
@@ -16,6 +16,13 @@ final class MicrophoneCapture: @unchecked Sendable {
 	/// Mono samples waiting to fill the next 480-sample frame. Only touched on the tap thread.
 	private var pending: [Float] = []
 	private var frame = [Int16](repeating: 0, count: frameSamples * 2)
+
+	/// While true, frames are captured but dropped (the mic is muted).
+	var paused: Bool {
+		get { os_unfair_lock_lock(&sendLock); defer { os_unfair_lock_unlock(&sendLock) }; return _paused }
+		set { os_unfair_lock_lock(&sendLock); _paused = newValue; os_unfair_lock_unlock(&sendLock) }
+	}
+	private var _paused = true
 
 	private var sendLock = os_unfair_lock()
 	private var _send: ((UnsafeMutablePointer<Int16>) -> Void)?
@@ -69,11 +76,12 @@ final class MicrophoneCapture: @unchecked Sendable {
 		engine.inputNode.removeTap(onBus: 0)
 		try? engine.inputNode.setVoiceProcessingEnabled(false)
 		converter = nil
-		log.info("Microphone off")
+		paused = true
+		log.info("Microphone removed")
 	}
 
 	private func process(_ buffer: AVAudioPCMBuffer) {
-		guard let converter else { return }
+		guard let converter, !paused else { pending.removeAll(keepingCapacity: true); return }
 		let ratio = monoFormat.sampleRate / buffer.format.sampleRate
 		let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
 		guard let out = AVAudioPCMBuffer(pcmFormat: monoFormat, frameCapacity: capacity) else { return }

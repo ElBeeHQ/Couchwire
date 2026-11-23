@@ -8,9 +8,11 @@ final class AudioPlayer: @unchecked Sendable {
 	private let engine = AVAudioEngine()
 	private var sourceNode: AVAudioSourceNode?
 	private var ring: PCMRingBuffer?
-	private var channels = 2
 	let microphone = MicrophoneCapture()
-	private(set) var micActive = false
+	/// Whether the mic tap (and voice processing) is installed. Once on it stays on for the
+	/// session: switching voice processing back off leaves the engine unable to restart
+	/// (error -10875), which silenced the game. Muting just stops sending.
+	private var micInstalled = false
 	private let log = Logger(subsystem: "Couchwire", category: "Audio")
 
 	var volume: Float {
@@ -19,8 +21,11 @@ final class AudioPlayer: @unchecked Sendable {
 	}
 
 	func configure(channels: Int, sampleRate: Double) {
-		stop()
-		self.channels = channels
+		if let sourceNode {
+			engine.stop()
+			engine.detach(sourceNode)
+			self.sourceNode = nil
+		}
 		// ~100 ms of capacity; we trim to a low target latency on underrun/overrun.
 		let ring = PCMRingBuffer(capacity: Int(sampleRate / 10) * channels, channels: channels)
 		self.ring = ring
@@ -29,8 +34,7 @@ final class AudioPlayer: @unchecked Sendable {
 										 channels: AVAudioChannelCount(channels), interleaved: false) else { return }
 
 		let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-			let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-			ring.read(into: abl, frames: Int(frameCount))
+			ring.read(into: UnsafeMutableAudioBufferListPointer(audioBufferList), frames: Int(frameCount))
 			return noErr
 		}
 		sourceNode = node
@@ -40,7 +44,7 @@ final class AudioPlayer: @unchecked Sendable {
 			try engine.start()
 			log.info("Audio started: \(channels) ch @ \(sampleRate) Hz")
 		} catch {
-			log.error("Audio engine failed to start: \(error.localizedDescription)")
+			log.error("Audio engine failed to start: \(error.localizedDescription, privacy: .public)")
 		}
 	}
 
@@ -48,33 +52,28 @@ final class AudioPlayer: @unchecked Sendable {
 		ring?.write(samples)
 	}
 
-	/// Turns capture (with echo cancellation) on or off. The engine restarts, so game audio
-	/// drops out for a moment. Returns whether the mic ended up on.
+	/// Starts or pauses sending your voice. The first time, voice processing is switched on
+	/// and the engine restarts, so game audio drops out for a moment. Returns whether the
+	/// mic is now live.
 	@discardableResult
 	func setMicrophone(_ on: Bool) -> Bool {
-		guard on != micActive else { return micActive }
-		let wasRunning = engine.isRunning
-		engine.stop()
-		if on {
-			micActive = microphone.install(on: engine)
-		} else {
-			microphone.uninstall(from: engine)
-			micActive = false
-		}
-		if wasRunning || micActive {
+		if on && !micInstalled {
+			engine.stop()
+			micInstalled = microphone.install(on: engine)
 			do { try engine.start() } catch {
-				log.error("Audio engine failed to restart: \(error.localizedDescription)")
+				log.error("Audio engine failed to restart with the mic: \(error.localizedDescription, privacy: .public)")
 			}
 		}
-		return micActive
+		microphone.paused = !(on && micInstalled)
+		return on && micInstalled
 	}
 
 	func stop() {
-		engine.stop()
 		microphone.send = nil
-		if micActive {
+		engine.stop()
+		if micInstalled {
 			microphone.uninstall(from: engine)
-			micActive = false
+			micInstalled = false
 		}
 		if let sourceNode {
 			engine.detach(sourceNode)

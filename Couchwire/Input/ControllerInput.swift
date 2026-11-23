@@ -31,16 +31,24 @@ final class ControllerInput: @unchecked Sendable {
 
 	/// PS button as read from the raw HID report. Only touched on `queue`.
 	private var hidPS = false
-	/// Written on the HID queue: the last PS state seen there, to only hop queues on change.
-	private var lastHIDPS = false
+	/// Written on the HID queue: the last system-button byte seen there, to act only on change.
+	private var lastSystemButtons: UInt8 = 0
+	/// Called on the main thread when the controller's mute button is pressed.
+	var onMuteButton: (() -> Void)?
 
-	private func reportArrived(_ timeStamp: UInt64, ps: Bool?) {
+	private func reportArrived(_ timeStamp: UInt64, systemButtons: UInt8?) {
 		os_unfair_lock_lock(&reportLock)
 		lastReportMach = timeStamp
 		os_unfair_lock_unlock(&reportLock)
 		stats?.inputReport()
-		if let ps, ps != lastHIDPS {
-			lastHIDPS = ps
+		guard let buttons = systemButtons, buttons != lastSystemButtons else { return }
+		let changed = buttons ^ lastSystemButtons
+		lastSystemButtons = buttons
+		if changed & DualSenseHID.muteBit != 0, buttons & DualSenseHID.muteBit != 0 {
+			DispatchQueue.main.async { [weak self] in self?.onMuteButton?() }
+		}
+		if changed & DualSenseHID.psBit != 0 {
+			let ps = buttons & DualSenseHID.psBit != 0
 			queue.async { [self] in
 				hidPS = ps
 				if ps { state.buttons |= UInt32(CW_BUTTON_PS) } else if controller?.extendedGamepad?.buttonHome?.isPressed != true {
@@ -54,8 +62,8 @@ final class ControllerInput: @unchecked Sendable {
 	init(stats: StreamStats? = nil, send: @escaping (CWControllerState) -> Void) {
 		self.stats = stats
 		self.send = send
-		feedback.onInputReport = { [weak self] timeStamp, ps in
-			self?.reportArrived(timeStamp, ps: ps)
+		feedback.onInputReport = { [weak self] timeStamp, buttons in
+			self?.reportArrived(timeStamp, systemButtons: buttons)
 		}
 	}
 
