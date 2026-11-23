@@ -57,6 +57,8 @@ final class AppModel {
 	/// Set while reconnecting after the stream was lost (the Mac changed network). The stream
 	/// window shows it in place of the frozen picture.
 	private(set) var reconnecting: RegisteredConsole?
+	/// Which try this is while reconnecting (1 for the first), for the stream window.
+	private(set) var reconnectAttempt = 0
 	/// Why reconnecting gave up, shown in the stream window.
 	private(set) var reconnectError: String?
 	@ObservationIgnored private var reconnectTask: Task<Void, Never>?
@@ -419,6 +421,8 @@ final class AppModel {
 		// abandoned after 12 s and made again, rather than waiting out libchiaki's 30 s.
 		let deadline = ContinuousClock.now + .seconds(120)
 		var attempt = 0
+		// Tries in a row that reached the console but couldn't open a direct connection to it.
+		var punchFailures = 0
 		while ContinuousClock.now < deadline {
 			// On a different network from the console: go over the internet straight away. Otherwise
 			// give discovery a moment to find it here (it forgets a console 3 s after it stops
@@ -427,6 +431,7 @@ final class AppModel {
 			let away = internetPlay && psnSignedIn && !LocalNetwork.contains(current.lastAddress)
 			try? await Task.sleep(for: .seconds(attempt == 0 ? (away ? 0.5 : 4) : (away ? 1 : 5)))
 			attempt += 1
+			reconnectAttempt = attempt
 			if Task.isCancelled { return }
 			lastError = nil
 			guard await connect(console) != nil else {
@@ -454,6 +459,20 @@ final class AppModel {
 			if session?.phase == .streaming {
 				reconnecting = nil
 				return
+			}
+			if let s = session, s.couldNotPunch {
+				punchFailures += 1
+				// Twice on the same network: this network won't allow it, so say so now rather
+				// than retrying for two minutes.
+				if punchFailures >= 2 {
+					if case .ended(let message) = s.phase { lastError = message }
+					StreamSession.timing.notice("No direct connection on this network after \(punchFailures, privacy: .public) tries; giving up")
+					s.stop()
+					session = nil
+					break
+				}
+			} else {
+				punchFailures = 0
 			}
 			session?.stop()
 			session = nil

@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- On a network that won't allow a direct connection to your PS5 (some mobile networks), Couchwire now says so after two tries instead of retrying for two minutes.
+- The connecting steps no longer say they're waking your PS5 when it's already on. After a network change they say they're reconnecting, explain the wait while the PS5 lets go of the old stream, and number each new try.
 - After a burst of Wi-Fi trouble at home (for example when your Mac scans for a hotspot), the sound catches up with the picture within about half a minute, instead of trailing it for several minutes.
 
 ### Added

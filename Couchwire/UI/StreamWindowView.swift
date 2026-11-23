@@ -147,10 +147,13 @@ struct StreamWindowView: View {
 		case .connecting:
 			StatusPanel {
 				ProgressView().controlSize(.large)
+				let reconnecting = model.reconnecting != nil
 				if session.internet != nil {
-					Text("Connecting to \(session.console.nickname) over the internet")
+					Text(reconnecting
+						 ? "Network changed. Reconnecting to \(session.console.nickname) over the internet"
+						 : "Connecting to \(session.console.nickname) over the internet")
 						.multilineTextAlignment(.center)
-					Text(internetStepText(session.internetStep))
+					Text(internetStepText(session.internetStep, reconnecting: reconnecting, attempt: model.reconnectAttempt))
 						.font(.callout)
 						.foregroundStyle(.secondary)
 						.multilineTextAlignment(.center)
@@ -160,7 +163,9 @@ struct StreamWindowView: View {
 					}
 					.keyboardShortcut(.cancelAction)
 				} else {
-					Text("Connecting to \(session.console.nickname)…")
+					Text(reconnecting
+						 ? "Network changed. Reconnecting to \(session.console.nickname)…"
+						 : "Connecting to \(session.console.nickname)…")
 				}
 			}
 		case .needsPIN(let incorrect):
@@ -184,14 +189,20 @@ struct StreamWindowView: View {
 }
 
 /// What an internet connection is doing, for the Connecting panel. It can take up to a minute.
-private func internetStepText(_ step: CWPSNStep?) -> String {
-	switch step {
+/// PlayStation Network wakes the console if it's resting, but it's usually awake, so the console
+/// step doesn't say "waking". After a network change the console is still holding the old stream,
+/// which is what that step is waiting for, and a retry says so rather than looking like a fresh start.
+private func internetStepText(_ step: CWPSNStep?, reconnecting: Bool, attempt: Int) -> String {
+	let text = switch step {
 	case CW_PSN_STEP_SESSION: "Contacting PlayStation Network…"
-	case CW_PSN_STEP_CONSOLE: "Waking your PS5 and asking it to join…"
-	case CW_PSN_STEP_CONNECTION: "Opening a direct connection…"
+	case CW_PSN_STEP_CONSOLE: reconnecting
+		? "Waiting for your PS5 to let go of the old stream. This can take up to a minute…"
+		: "Asking your PS5 to start Remote Play…"
+	case CW_PSN_STEP_CONNECTION: "Opening a direct connection to your PS5…"
 	case CW_PSN_STEP_STREAM: "Starting the stream…"
 	default: "Getting ready…"
 	}
+	return reconnecting && attempt > 1 ? "Try \(attempt): " + text : text
 }
 
 /// Shown when the stream keeps stuttering: offers to reconnect at lower quality.

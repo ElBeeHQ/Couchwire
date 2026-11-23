@@ -269,9 +269,14 @@ final class StreamSession {
 	@ObservationIgnored private var startedAt: CFTimeInterval = 0
 	private var elapsed: String { String(format: "%.1f", CACurrentMediaTime() - startedAt) }
 
+	/// The console answered but no direct connection could be opened to it: the networks in
+	/// between don't allow one. Trying again on the same network rarely helps.
+	private(set) var couldNotPunch = false
+
 	private func internetConnectFinished(_ err: Int32) {
 		guard err != 0, phase == .connecting else { return }
 		Self.timing.notice("Internet connect failed with \(err, privacy: .public) after \(self.elapsed, privacy: .public) s")
+		couldNotPunch = err == CW_ERR_HOST_UNREACH
 		let name = console.nickname
 		let message: String? = switch err {
 		case CW_ERR_CANCELED: nil
@@ -279,6 +284,8 @@ final class StreamSession {
 			"\(name) didn’t answer over the internet. Check it’s switched on or in rest mode with “Stay Connected to the Internet” on, and signed in to your PSN account."
 		case CW_ERR_HOST_UNREACH where PathWatcher.shared.usesVPN:
 			"Couldn’t open a connection to \(name) while a VPN is on. Most VPNs block the direct connection Remote Play needs. Turn the VPN off, or exclude Couchwire from it, then try again."
+		case CW_ERR_HOST_UNREACH where internet?.forcePortGuessing == true:
+			"This network doesn’t allow a direct connection to \(name). Some mobile networks block it, for Sony’s own Remote Play app too. Try Wi-Fi or a different hotspot."
 		case CW_ERR_HOST_UNREACH:
 			"Couldn’t open a connection to \(name) through these networks. Turn on “Try harder on difficult networks” in Settings › Internet Play, or try another network."
 		default:
