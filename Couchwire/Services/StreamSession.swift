@@ -472,7 +472,8 @@ final class StreamSession {
 			s.observedMs, s.controllerMs, s.networkRttMs, s.decodeAvgMs, s.smoothingMs, s.displayWaitAvgMs, s.refreshHz,
 			s.pingJitterMs, s.packetLoss * 100, s.lateFrameRatio * 100, s.framesLost, s.recentFramesLost,
 			s.audioBufferMs, s.audioGaps, s.recentAudioGaps, s.fps, s.bitrateMbps)
-		Self.timing.notice("Stats \(line, privacy: .public)")
+		let smoothingNote = pacer.map { $0.mode == .automatic ? ($0.steppedUp ? "automatic, steadiest" : "automatic, balanced") : $0.mode.rawValue } ?? "none"
+		Self.timing.notice("Stats \(line, privacy: .public), smoothing \(smoothingNote, privacy: .public)")
 	}
 
 	/// How the stream went, for automatic quality to learn from. Nil if it was too short to tell.

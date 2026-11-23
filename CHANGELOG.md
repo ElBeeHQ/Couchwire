@@ -9,8 +9,14 @@
 
 ### Changed
 
+- **Automatic smoothing** no longer assumes the worst on mobile hotspots. It starts at Balanced and steps up to Steadiest only while frames keep arriving very late, then steps back down after a calm minute. On a steady hotspot that roughly halves the delay.
 - A tidier **About Couchwire** window.
 - While connecting over the internet, Couchwire keeps libchiaki's detailed connection log, so slow or failed connections can be looked into. It asks a busy PS5 again after 8 seconds instead of 12.
+
+### Fixed
+
+- **Lower Quality** no longer fails over the internet. The PS5 takes up to a minute to let go of the old stream, so Couchwire now keeps asking, as it does after a network change, and says it's restarting at lower quality.
+- Couchwire no longer quits while connecting over the internet. On some networks it opens 250 sockets at once to find a way through, which used up macOS's limit of 256 for an app.
 
 ## v0.2.1: The PS button, and a tidier Settings
 

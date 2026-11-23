@@ -32,7 +32,9 @@ struct StreamWindowView: View {
 				} else if let console = model.reconnecting {
 					StatusPanel {
 						ProgressView().controlSize(.large)
-						Text("Network changed. Reconnecting to \(console.nickname)…")
+						Text(model.reconnectReason == .lowerQuality
+							 ? "Restarting \(console.nickname) at lower quality…"
+							 : "Network changed. Reconnecting to \(console.nickname)…")
 							.multilineTextAlignment(.center)
 						Button("Cancel") {
 							model.endSession()
@@ -64,7 +66,7 @@ struct StreamWindowView: View {
 				   !session.strugglingDismissed, model.canLowerQuality(session) {
 					StrugglingBanner(
 						reason: session.struggleReason,
-						lower: { Task { _ = await model.reconnectAtLowerQuality() } },
+						lower: { model.reconnectAtLowerQuality() },
 						dismiss: { session.strugglingDismissed = true })
 					.padding(24)
 					.transition(.move(edge: .bottom).combined(with: .opacity))
@@ -155,7 +157,7 @@ struct StreamWindowView: View {
 				let reconnecting = model.reconnecting != nil
 				if session.internet != nil {
 					Text(reconnecting
-						 ? "Network changed. Reconnecting to \(session.console.nickname) over the internet"
+						 ? (model.reconnectReason == .lowerQuality ? "Restarting \(session.console.nickname) at lower quality over the internet" : "Network changed. Reconnecting to \(session.console.nickname) over the internet")
 						 : "Connecting to \(session.console.nickname) over the internet")
 						.multilineTextAlignment(.center)
 					Text(internetStepText(session.internetStep, reconnecting: reconnecting, attempt: model.reconnectAttempt))
@@ -169,7 +171,7 @@ struct StreamWindowView: View {
 					.keyboardShortcut(.cancelAction)
 				} else {
 					Text(reconnecting
-						 ? "Network changed. Reconnecting to \(session.console.nickname)…"
+						 ? (model.reconnectReason == .lowerQuality ? "Restarting \(session.console.nickname) at lower quality…" : "Network changed. Reconnecting to \(session.console.nickname)…")
 						 : "Connecting to \(session.console.nickname)…")
 				}
 			}

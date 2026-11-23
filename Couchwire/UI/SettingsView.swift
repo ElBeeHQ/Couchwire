@@ -12,7 +12,7 @@ struct SettingsView: View {
 		switch model.smoothing {
 		case .off: break
 		case .automatic:
-			parts.append("Smoothing holds frames back for a moment when they arrive unevenly, so play looks steady. On a steady network it adds no delay; on a mobile hotspot it works hardest, for a smoother picture but more delay.")
+			parts.append("Smoothing holds frames back for a moment when they arrive unevenly, so play looks steady. On a steady network it adds no delay. On a mobile hotspot it steps up only while the connection has long gaps, for a smoother picture but more delay.")
 		case .balanced:
 			parts.append("Smoothing holds frames back for a moment when they arrive unevenly, so play looks steady. On a steady network it adds no delay.")
 		case .steadiest:

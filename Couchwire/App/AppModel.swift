@@ -54,9 +54,12 @@ final class AppModel {
 	/// Shows the first-run setup over the console list.
 	var showingOnboarding = false
 	private(set) var waking: Set<String> = []
-	/// Set while reconnecting after the stream was lost (the Mac changed network). The stream
-	/// window shows it in place of the frozen picture.
+	/// Set while reconnecting after the stream was lost (the Mac changed network) or restarted at lower
+	/// quality. The stream window shows it in place of the frozen picture.
 	private(set) var reconnecting: RegisteredConsole?
+	/// Why, for the stream window's wording.
+	private(set) var reconnectReason = ReconnectReason.networkChanged
+	enum ReconnectReason { case networkChanged, lowerQuality }
 	/// Which try this is while reconnecting (1 for the first), for the stream window.
 	private(set) var reconnectAttempt = 0
 	/// Why reconnecting gave up, shown in the stream window.
@@ -391,8 +394,8 @@ final class AppModel {
 
 	/// The stream is struggling: remember a lower quality for this connection and reconnect with it.
 	/// Turns automatic quality on, since that's what picks the lower settings.
-	func reconnectAtLowerQuality() async -> StreamSession? {
-		guard let s = session else { return nil }
+	func reconnectAtLowerQuality() {
+		guard let s = session else { return }
 		let console = s.console
 		// Step down from wherever this session actually was.
 		let current = ConnectionQuality.ladder.lastIndex { ConnectionQuality.apply($0, ceiling: s.settings) == s.settings } ?? 0
@@ -403,9 +406,16 @@ final class AppModel {
 		autoQuality = true
 		s.skipLearning()
 		endSession()
-		// Let the console notice the old session has gone before asking for a new one.
-		try? await Task.sleep(for: .seconds(2))
-		return await connect(console)
+		// The console takes a while to let go of the old stream, over the internet up to a minute, and
+		// ignores requests until then. The reconnect loop keeps asking, as after a network change.
+		reconnecting = console
+		reconnectReason = .lowerQuality
+		reconnectError = nil
+		StreamSession.timing.notice("Restarting at lower quality")
+		reconnectTask = Task { [weak self] in
+			try? await Task.sleep(for: .seconds(2))
+			await self?.reconnect(console)
+		}
 	}
 
 	func endSession() {
@@ -424,6 +434,7 @@ final class AppModel {
 		guard session === lost, reconnecting == nil else { lost.stop(); return }
 		let console = lost.console
 		reconnecting = console
+		reconnectReason = .networkChanged
 		reconnectError = nil
 		StreamSession.timing.notice("Stream lost; reconnecting")
 		// A network switch says nothing about the connection's quality.
@@ -505,7 +516,9 @@ final class AppModel {
 		}
 		if Task.isCancelled { return }
 		reconnecting = nil
-		reconnectError = lastError ?? "Couldn’t reconnect to \(console.nickname) on this network."
+		reconnectError = lastError ?? (reconnectReason == .lowerQuality
+			? "Couldn’t restart the stream from \(console.nickname). Wait a minute, then press Play again."
+			: "Couldn’t reconnect to \(console.nickname) on this network.")
 			+ (internetPlay ? "" : " To play away from home, turn on Internet Play in Settings.")
 		lastError = nil
 	}

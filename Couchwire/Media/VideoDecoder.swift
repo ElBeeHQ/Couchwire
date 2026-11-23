@@ -303,7 +303,7 @@ private func withPointers<R>(_ sets: [Data], _ body: (UnsafePointer<UnsafePointe
 /// is ignored, so on a steady network the hold is zero and it costs no delay there.
 /// How hard smoothing works: a trade between steady motion and a quick response.
 enum SmoothingMode: String, CaseIterable, Identifiable, Sendable {
-	/// Steadiest on mobile hotspots, whose long gaps need it, and Balanced everywhere else.
+	/// Balanced, stepping up to Steadiest on a mobile hotspot only while it shows the long gaps that need it.
 	case automatic
 	/// Show each frame the moment it's decoded.
 	case off
@@ -322,10 +322,10 @@ enum SmoothingMode: String, CaseIterable, Identifiable, Sendable {
 		}
 	}
 
-	/// The mode to use on `link`.
+	/// The mode to use on `link`. On a mobile hotspot Automatic stays Automatic: the pacer decides as it goes.
 	func resolved(for link: ConnectionQuality.Link) -> SmoothingMode {
 		guard self == .automatic else { return self }
-		return link == .internetMobile ? .steadiest : .balanced
+		return link == .internetMobile ? .automatic : .balanced
 	}
 }
 
@@ -367,6 +367,13 @@ final class FramePacer: @unchecked Sendable {
 	/// How far behind the beat each recent frame arrived, in seconds.
 	private var lateness: [Double] = []
 	private var head = 0
+	/// Automatic: when recent frames arrived more than `longGap` late. Three within 30 s step up to
+	/// Steadiest; a minute without one steps back down to Balanced.
+	private var longGaps: [Double] = []
+	private var _steppedUp = false
+	/// Automatic on a mobile hotspot: whether it has stepped up to Steadiest.
+	var steppedUp: Bool { lock.lock(); defer { lock.unlock() }; return _steppedUp }
+	static let longGap = 0.04
 
 	init(fps: Int, maxHold: Double, mode: SmoothingMode, home: Bool) {
 		self.maxHold = maxHold
@@ -401,7 +408,15 @@ final class FramePacer: @unchecked Sendable {
 			lastShow = decodedAt
 			return decodedAt
 		}
-		if _mode == .steadiest {
+		var mode = _mode
+		if mode == .automatic {
+			if late > Self.longGap { longGaps.append(decodedAt) }
+			longGaps.removeAll { decodedAt - $0 > 60 }
+			let recent = longGaps.filter { decodedAt - $0 <= 30 }.count
+			if recent >= 3 { _steppedUp = true } else if longGaps.isEmpty { _steppedUp = false }
+			mode = _steppedUp ? .steadiest : .balanced
+		}
+		if mode == .steadiest {
 			// Hold for as long as the latest bad gap, so the next one like it is covered too. Shrinks
 			// slowly once the network calms down.
 			hold = late > hold ? min(late, maxHold) : hold * (decay + (1 - decay) / 2)

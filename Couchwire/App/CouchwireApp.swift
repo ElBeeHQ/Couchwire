@@ -6,10 +6,20 @@ struct CouchwireApp: App {
 	@AppStorage("showStats") private var showStats = false
 
 	init() {
+		Self.raiseOpenFileLimit()
 		// Must run before AppModel loads consoles and settings from UserDefaults.
 		LegacyDefaults.migrateIfNeeded()
 		_model = State(initialValue: AppModel())
 		_ = Updater.shared  // start Sparkle's scheduled checks at launch
+	}
+
+	/// macOS gives an app 256 open files and sockets. A connect over the internet can open 250 probe sockets at
+	/// once, so the app ran out and quit. 1024 leaves room and keeps every socket number below select()'s limit.
+	private static func raiseOpenFileLimit() {
+		var limit = rlimit()
+		guard getrlimit(RLIMIT_NOFILE, &limit) == 0, limit.rlim_cur < 1024 else { return }
+		limit.rlim_cur = min(1024, limit.rlim_max)
+		setrlimit(RLIMIT_NOFILE, &limit)
 	}
 
 	var body: some Scene {
