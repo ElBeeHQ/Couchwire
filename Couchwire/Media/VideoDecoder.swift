@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import CoreMedia
 import QuartzCore
@@ -23,6 +24,8 @@ final class VideoDecoder: @unchecked Sendable {
 	private var parameterSets: [UInt8: Data] = [:] // keyed by NAL type
 	private var waitingForKeyframe = true
 	private let log = Logger(subsystem: "Couchwire", category: "Video")
+	/// Whether the first frame after a format change has been checked for HDR, for the log.
+	private var checkedFrame = false
 	/// Called when the decoder needs a fresh keyframe (e.g. after a decode failure).
 	var requestKeyframe: (() -> Void)?
 	/// When set, frames are timed to play out evenly instead of shown the moment they decode.
@@ -126,6 +129,10 @@ final class VideoDecoder: @unchecked Sendable {
 			return
 		}
 		stats.frameDecoded(submittedAt: submitted, decodedAt: decodedAt)
+		if !checkedFrame {
+			checkedFrame = true
+			logFrame(imageBuffer)
+		}
 
 		var format: CMVideoFormatDescription?
 		guard CMVideoFormatDescriptionCreateForImageBuffer(
@@ -171,7 +178,8 @@ final class VideoDecoder: @unchecked Sendable {
 		let isHDR = transfer == (kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String)
 			|| transfer == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
 		stats.setDynamicRange(isHDR ? (transfer.contains("2084") ? "HDR10" : "HLG") : "SDR")
-		log.info("Video format: \(dims.width)x\(dims.height), transfer \(transfer, privacy: .public), primaries \(primaries, privacy: .public)")
+		log.notice("Video format: \(dims.width)x\(dims.height), \(isHDR ? "HDR" : "SDR", privacy: .public) (transfer \(transfer, privacy: .public), primaries \(primaries, privacy: .public)), asked for HDR: \(self.hdr)")
+		checkedFrame = false
 
 		let spec: [CFString: Any] = [
 			kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true,
@@ -194,6 +202,21 @@ final class VideoDecoder: @unchecked Sendable {
 		VTSessionSetProperty(newSession, key: kVTDecompressionPropertyKey_MaximizePowerEfficiency, value: kCFBooleanFalse)
 		session = newSession
 		waitingForKeyframe = true
+	}
+
+	/// What reaches the screen: the decoded frame's bit depth and colour tags, and how much HDR headroom the
+	/// stream window's display has (1 means none: HDR shows as SDR).
+	private func logFrame(_ buffer: CVImageBuffer) {
+		let format = CVPixelBufferGetPixelFormatType(buffer)
+		let bits = format == kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange ? "10-bit" : format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ? "8-bit" : "format \(format)"
+		let transfer = CVBufferCopyAttachment(buffer, kCVImageBufferTransferFunctionKey, nil) as? String ?? "untagged"
+		let log = log
+		DispatchQueue.main.async {
+			let screen = NSApp.windows.first { $0.title == "Remote Play" && $0.isVisible }?.screen ?? NSScreen.main
+			let potential = screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1
+			let now = screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
+			log.notice("First frame: \(bits, privacy: .public), transfer \(transfer, privacy: .public); display \(screen?.localizedName ?? "unknown", privacy: .public) HDR headroom \(potential, format: .fixed(precision: 1))x, now \(now, format: .fixed(precision: 1))x")
+		}
 	}
 
 	private func nalType(_ header: UInt8) -> UInt8 {

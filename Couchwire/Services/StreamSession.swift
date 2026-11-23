@@ -467,11 +467,11 @@ final class StreamSession {
 	private func logStats(_ s: StreamStats.Snapshot) {
 		statsTicks += 1
 		guard statsTicks % 20 == 0 else { return }
-		let line = String(format: "%3.0fs %@ %@ %dfps %.0fMbps | total %.1f = controller %.1f + network %.1f + decode %.1f + smoothing %.1f + display %.1f ms (%.0f Hz) | jitter %.1f ms, loss %.1f%%, late %.0f%%, lost %d (%d recent), audio %.0f ms %d gaps (%d recent), %.0f fps, %.1f Mbps",
+		let line = String(format: "%3.0fs %@ %@ %dfps %.0fMbps | total %.1f = controller %.1f + network %.1f + decode %.1f + smoothing %.1f + display %.1f ms (%.0f Hz) | jitter %.1f ms, loss %.1f%%, late %.0f%%, lost %d (%d recent), audio %.0f ms %d gaps (%d recent), %.0f fps, %.1f Mbps, %@ %@",
 			Double(statsTicks) / 2, link.rawValue, settings.resolution.rawValue, settings.fps, Double(settings.bitrate) / 1000,
 			s.observedMs, s.controllerMs, s.networkRttMs, s.decodeAvgMs, s.smoothingMs, s.displayWaitAvgMs, s.refreshHz,
 			s.pingJitterMs, s.packetLoss * 100, s.lateFrameRatio * 100, s.framesLost, s.recentFramesLost,
-			s.audioBufferMs, s.audioGaps, s.recentAudioGaps, s.fps, s.bitrateMbps)
+			s.audioBufferMs, s.audioGaps, s.recentAudioGaps, s.fps, s.bitrateMbps, s.codec, s.dynamicRange.isEmpty ? "?" : s.dynamicRange)
 		let smoothingNote = pacer.map { $0.mode == .automatic ? ($0.steppedUp ? "automatic, steadiest" : "automatic, balanced") : $0.mode.rawValue } ?? "none"
 		Self.timing.notice("Stats \(line, privacy: .public), smoothing \(smoothingNote, privacy: .public)")
 	}
@@ -482,7 +482,9 @@ final class StreamSession {
 	private func teardown() {
 		if automaticQuality, let outcome = detector.outcome, !learned {
 			learned = true
+			let before = ConnectionQuality.step(for: link)
 			ConnectionQuality.record(outcome, link: link)
+			Self.timing.notice("Quality on \(self.link.rawValue, privacy: .public): \(String(describing: outcome), privacy: .public), step \(before) → \(ConnectionQuality.step(for: self.link))")
 		}
 		statsTimer?.invalidate()
 		statsTimer = nil

@@ -10,6 +10,8 @@
 ### Changed
 
 - **Automatic smoothing** no longer assumes the worst on mobile hotspots. It starts at Balanced and steps up to Steadiest only while frames keep arriving very late, then steps back down after a calm minute. On a steady hotspot that roughly halves the delay.
+- **Automatic quality climbs back faster.** After a session at home with a short, steady connection and nothing lost, it goes straight back to 1080p at 30 Mbps instead of one step at a time.
+- **Automatic quality can reach 50 Mbps at home.** After a smooth session at 30 Mbps on your home network, wired or Wi-Fi, it moves up to 50 Mbps, if your own settings allow it. Over the internet it stays at 30 Mbps at most.
 - A tidier **About Couchwire** window.
 - While connecting over the internet, Couchwire keeps libchiaki's detailed connection log, so slow or failed connections can be looked into. It asks a busy PS5 again after 8 seconds instead of 12.
 

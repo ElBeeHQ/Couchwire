@@ -7,7 +7,8 @@ import QuartzCore
 ///
 /// The PS5 fixes resolution, frame rate and bitrate when a session starts, so quality can only
 /// change between sessions. Each session's result moves that connection one step down the ladder
-/// (it struggled) or one step up (it ran smoothly for a while).
+/// (it struggled) or one step up (it ran smoothly for a while). A session that was clearly excellent
+/// (a short, steady round trip and nothing lost) goes straight back to 30 Mbps at 1080p.
 enum ConnectionQuality {
 	/// The kind of link a session runs over. Each remembers its own step.
 	enum Link: String {
@@ -25,12 +26,23 @@ enum ConnectionQuality {
 		/// Where a connection starts before Couchwire has learned anything about it.
 		fileprivate var defaultStep: Int {
 			switch self {
-			case .homeWired: 0
-			case .homeWireless: 1
-			case .internet: 3
-			case .internetMobile: 4
+			case .homeWired: 1
+			case .homeWireless: 2
+			case .internet: 4
+			case .internetMobile: 5
 			}
 		}
+
+		/// The best step this link can reach. 50 Mbps is for home networks only: over the internet the
+		/// home connection's upload speed is the limit.
+		fileprivate var topStep: Int {
+			switch self {
+			case .homeWired, .homeWireless: 0
+			case .internet, .internetMobile: 1
+			}
+		}
+
+		fileprivate var isHome: Bool { self == .homeWired || self == .homeWireless }
 	}
 
 	struct Step: Equatable {
@@ -42,6 +54,7 @@ enum ConnectionQuality {
 
 	/// Best first. Bitrate drops before resolution, and frame rate goes last.
 	static let ladder: [Step] = [
+		Step(resolution: .p1080, fps: 60, bitrate: 50_000),
 		Step(resolution: .p1080, fps: 60, bitrate: 30_000),
 		Step(resolution: .p1080, fps: 60, bitrate: 20_000),
 		Step(resolution: .p1080, fps: 60, bitrate: 15_000),
@@ -71,8 +84,13 @@ enum ConnectionQuality {
 
 	/// The step to start this link at.
 	static func step(for link: Link) -> Int {
-		let stored = UserDefaults.standard.object(forKey: key(link)) as? Int
-		return min(max(stored ?? link.defaultStep, 0), ladder.count - 1)
+		let defaults = UserDefaults.standard
+		var stored = defaults.object(forKey: key(link)) as? Int
+		// Before 50 Mbps joined the top of the ladder, steps were saved one lower.
+		if stored == nil, let old = defaults.object(forKey: legacyKey(link)) as? Int {
+			stored = old + 1
+		}
+		return min(max(stored ?? link.defaultStep, link.topStep), ladder.count - 1)
 	}
 
 	/// The settings to stream with: the link's step, capped by the user's own settings (their
@@ -91,26 +109,43 @@ enum ConnectionQuality {
 
 	static func setStep(_ step: Int, for link: Link) {
 		guard !UserDefaults.standard.bool(forKey: "CouchwireDemo") else { return }
-		UserDefaults.standard.set(min(max(step, 0), ladder.count - 1), forKey: key(link))
+		UserDefaults.standard.set(min(max(step, link.topStep), ladder.count - 1), forKey: key(link))
 	}
 
-	enum Outcome { case struggled, smooth }
+	/// The step for 1080p at 60 fps and 30 Mbps, where an excellent session jumps to.
+	private static let fullHD = 1
+
+	enum Outcome {
+		case struggled, smooth
+		/// Smooth, and the network was clearly good: a short, steady round trip with nothing lost.
+		case excellent
+	}
 
 	/// Learn from a finished session.
 	static func record(_ outcome: Outcome, link: Link) {
 		let s = step(for: link)
-		let next = outcome == .struggled ? min(s + 1, ladder.count - 1) : max(s - 1, 0)
-		if next != s { setStep(next, for: link) }
+		// Only a home network's round trip is measured live, so only home sessions can be excellent.
+		let outcome = outcome == .excellent && !link.isHome ? .smooth : outcome
+		let next = switch outcome {
+		case .struggled: s + 1
+		case .smooth: s - 1
+		// Straight back to 1080p at 30 Mbps. 50 Mbps still takes one more good session at 30.
+		case .excellent: s > fullHD ? fullHD : s - 1
+		}
+		let clamped = min(max(next, link.topStep), ladder.count - 1)
+		if clamped != s { setStep(clamped, for: link) }
 	}
 
 	/// Forget what's been learned, so every link starts from its default again.
 	static func reset() {
 		for link in [Link.homeWired, .homeWireless, .internet, .internetMobile] {
 			UserDefaults.standard.removeObject(forKey: key(link))
+			UserDefaults.standard.removeObject(forKey: legacyKey(link))
 		}
 	}
 
-	private static func key(_ link: Link) -> String { "quality.\(link.rawValue)" }
+	private static func key(_ link: Link) -> String { "qualityStep.\(link.rawValue)" }
+	private static func legacyKey(_ link: Link) -> String { "quality.\(link.rawValue)" }
 }
 
 /// Keeps the Mac's current network path, for telling wired from Wi-Fi and spotting hotspots.
@@ -170,6 +205,9 @@ struct StruggleDetector {
 	private var count = 0
 	private var badTotal = 0
 	private var lastFramesLost = 0
+	/// Half-seconds with a live round trip under 10 ms and jitter under 3 ms, and whether any frame was lost.
+	private var steadyCount = 0
+	private var anyLost = false
 
 	/// True once the last 10 s were mostly bad.
 	private(set) var struggling = false
@@ -186,6 +224,8 @@ struct StruggleDetector {
 		let lost = s.framesLost - lastFramesLost
 		lastFramesLost = s.framesLost
 		guard count > Self.grace else { return }
+		if lost > 0 { anyLost = true }
+		if let ping = s.pingMs, ping < 10, s.pingJitterMs < 3 { steadyCount += 1 }
 		let lossy = s.packetLoss > 0.02 || lost > 1
 		let late = s.lateFrameRatio > 0.1
 		let bad = lossy || late
@@ -205,7 +245,9 @@ struct StruggleDetector {
 		if struggling { return .struggled }
 		let measured = count - Self.grace
 		// Smooth: at least 90 s with under 3% bad samples.
-		if measured >= 180, Double(badTotal) / Double(measured) < 0.03 { return .smooth }
-		return nil
+		guard measured >= 180, Double(badTotal) / Double(measured) < 0.03 else { return nil }
+		// Excellent: nothing bad or lost, and the round trip short and steady 95% of the time.
+		if badTotal == 0, !anyLost, Double(steadyCount) / Double(measured) >= 0.95 { return .excellent }
+		return .smooth
 	}
 }
