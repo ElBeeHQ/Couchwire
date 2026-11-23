@@ -5,7 +5,7 @@ import WebKit
 /// directly into Sony's page; Couchwire only sees the redirect carrying the OAuth code.
 struct PSNSignInSheet: View {
 	@Environment(\.dismiss) private var dismiss
-	let onAccountID: (String) -> Void
+	let onSignIn: (PSNAuth.SignIn) -> Void
 
 	@State private var phase: Phase = .loading
 	@State private var attempt = 0
@@ -52,7 +52,7 @@ struct PSNSignInSheet: View {
 			Divider()
 
 			HStack {
-				Text("Only your Account ID is saved. You stay signed out of PSN in Couchwire.")
+				Text("Your password goes only to Sony. Couchwire keeps your Account ID, and stays signed in only if Internet Play is on.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 				Spacer()
@@ -68,8 +68,7 @@ struct PSNSignInSheet: View {
 		phase = .resolving
 		Task {
 			do {
-				let id = try await PSNAuth.accountID(fromRedirect: url)
-				onAccountID(id)
+				onSignIn(try await PSNAuth.signIn(fromRedirect: url))
 				dismiss()
 			} catch {
 				phase = .failed(error.localizedDescription)

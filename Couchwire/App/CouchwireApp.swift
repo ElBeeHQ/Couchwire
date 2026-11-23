@@ -16,6 +16,7 @@ struct CouchwireApp: App {
 		Window("Couchwire", id: "main") {
 			ConsoleBrowserView()
 				.environment(model)
+				.preferredColorScheme(AppModel.demoColorScheme)
 				.frame(minWidth: 560, minHeight: 380)
 		}
 		.windowToolbarStyle(.unified)

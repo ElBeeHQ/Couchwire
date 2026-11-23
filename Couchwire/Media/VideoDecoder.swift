@@ -25,12 +25,16 @@ final class VideoDecoder: @unchecked Sendable {
 	private let log = Logger(subsystem: "Couchwire", category: "Video")
 	/// Called when the decoder needs a fresh keyframe (e.g. after a decode failure).
 	var requestKeyframe: (() -> Void)?
+	/// When set, frames are timed to play out evenly instead of shown the moment they decode.
+	/// Needs the display layer's control timebase to run on the host clock.
+	private let pacer: FramePacer?
 
-	init(codec: Codec, hdr: Bool = false, renderer: AVSampleBufferVideoRenderer, stats: StreamStats) {
+	init(codec: Codec, hdr: Bool = false, renderer: AVSampleBufferVideoRenderer, stats: StreamStats, pacer: FramePacer? = nil) {
 		self.codec = codec
 		self.hdr = hdr
 		self.renderer = renderer
 		self.stats = stats
+		self.pacer = pacer
 	}
 
 	deinit {
@@ -127,12 +131,21 @@ final class VideoDecoder: @unchecked Sendable {
 		guard CMVideoFormatDescriptionCreateForImageBuffer(
 			allocator: kCFAllocatorDefault, imageBuffer: imageBuffer, formatDescriptionOut: &format) == noErr,
 			let format else { return }
-		var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+		var showAt = pts
+		if let pacer {
+			let at = pacer.schedule(decodedAt: decodedAt)
+			stats.frameScheduled(leadMs: (at - decodedAt) * 1000)
+			stats.frameShown(at: at)
+			showAt = CMTime(seconds: at, preferredTimescale: 1_000_000_000)
+		} else {
+			stats.frameShown(at: decodedAt)
+		}
+		var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: showAt, decodeTimeStamp: .invalid)
 		var sample: CMSampleBuffer?
 		guard CMSampleBufferCreateReadyWithImageBuffer(
 			allocator: kCFAllocatorDefault, imageBuffer: imageBuffer, formatDescription: format,
 			sampleTiming: &timing, sampleBufferOut: &sample) == noErr, let sample else { return }
-		Self.markDisplayImmediately(sample)
+		if pacer == nil { Self.markDisplayImmediately(sample) }
 		renderer.enqueue(sample)
 	}
 
@@ -282,5 +295,125 @@ private func withPointers<R>(_ sets: [Data], _ body: (UnsafePointer<UnsafePointe
 	let pointers = buffers.map { UnsafePointer($0) }
 	return pointers.withUnsafeBufferPointer { pp in
 		sizes.withUnsafeBufferPointer { sp in body(pp.baseAddress!, sp.baseAddress!) }
+	}
+}
+
+/// Smoothing: evens out frames that arrive bunched up or late by holding each one back a little,
+/// just long enough to cover the network's recent unevenness (at most 50 ms). Unevenness under 6 ms
+/// is ignored, so on a steady network the hold is zero and it costs no delay there.
+/// How hard smoothing works: a trade between steady motion and a quick response.
+enum SmoothingMode: String, CaseIterable, Identifiable, Sendable {
+	/// Steadiest on mobile hotspots, whose long gaps need it, and Balanced everywhere else.
+	case automatic
+	/// Show each frame the moment it's decoded.
+	case off
+	/// Cover all but the rarest late frames, for little added delay.
+	case balanced
+	/// Cover even the rare long gaps of mobile networks, at the cost of more delay.
+	case steadiest
+
+	var id: String { rawValue }
+	var name: String {
+		switch self {
+		case .automatic: "Automatic"
+		case .off: "Off"
+		case .balanced: "Balanced"
+		case .steadiest: "Steadiest"
+		}
+	}
+
+	/// The mode to use on `link`.
+	func resolved(for link: ConnectionQuality.Link) -> SmoothingMode {
+		guard self == .automatic else { return self }
+		return link == .internetMobile ? .steadiest : .balanced
+	}
+}
+
+final class FramePacer: @unchecked Sendable {
+	/// The longest a frame is held, for each kind of link. Mobile networks deliver in bigger bursts.
+	static func maxHold(for link: ConnectionQuality.Link) -> Double {
+		switch link {
+		case .internetMobile: 0.1
+		case .internet: 0.07
+		case .homeWired, .homeWireless: 0.05
+		}
+	}
+	/// Lateness remembered, in frames: about 5 s, so bursts a few seconds apart are still covered.
+	private static let memory = 300
+	/// Unevenness too small to see, which smoothing leaves alone.
+	static let tolerance: Double = 0.006
+
+	/// The shortest gap between frames the stream allows (1 / its frame rate).
+	private let minInterval: Double
+	/// The rhythm frames actually arrive at: a 30 fps game in a 60 fps stream sends every 33 ms.
+	private var interval: Double
+	private var gaps: [Double] = []
+	private var gapHead = 0
+	private let lock = NSLock()
+	private var lastShow: Double = 0
+	private var lastDecoded: Double = 0
+	private var hold: Double = 0
+	private let maxHold: Double
+	private var _mode: SmoothingMode
+	/// Can change mid-stream; takes effect from the next frame.
+	var mode: SmoothingMode {
+		get { lock.lock(); defer { lock.unlock() }; return _mode }
+		set { lock.lock(); _mode = newValue; lock.unlock() }
+	}
+	/// How far behind the beat each recent frame arrived, in seconds.
+	private var lateness: [Double] = []
+	private var head = 0
+
+	init(fps: Int, maxHold: Double, mode: SmoothingMode) {
+		self.maxHold = maxHold
+		_mode = mode
+		minInterval = 1 / Double(max(fps, 1))
+		interval = minInterval
+	}
+
+	/// The host time to show a frame decoded at `decodedAt`.
+	func schedule(decodedAt: Double) -> Double {
+		lock.lock(); defer { lock.unlock() }
+		var late = 0.0
+		if lastDecoded > 0 {
+			// Follow the real rhythm: the median of the last second of gaps, from the stream's
+			// frame rate down to 20 fps.
+			let gap = decodedAt - lastDecoded
+			if gaps.count < 60 { gaps.append(gap) } else { gaps[gapHead] = gap; gapHead = (gapHead + 1) % 60 }
+			if gaps.count >= 10 {
+				let sorted = gaps.sorted()
+				interval = min(max(sorted[sorted.count / 2], minInterval), 0.05)
+			}
+			// A few ms early or late never shows: the frame still lands on the same display refresh.
+			// Only cover lateness beyond that, so a steady network gets no added delay.
+			late = max(0, gap - interval - Self.tolerance)
+			if lateness.count < Self.memory { lateness.append(late) } else { lateness[head] = late; head = (head + 1) % Self.memory }
+		}
+		lastDecoded = decodedAt
+		if _mode == .off {
+			hold = 0
+			lastShow = decodedAt
+			return decodedAt
+		}
+		if _mode == .steadiest {
+			// Hold for as long as the latest bad gap, so the next one like it is covered too. Shrinks
+			// slowly once the network calms down.
+			hold = late > hold ? min(late, maxHold) : hold * 0.9995
+		} else {
+			hold = balancedHold()
+		}
+		var show = max(decodedAt, min(lastShow + interval, decodedAt + hold))
+		// Never ask for two frames at once: keep at least half a frame between them.
+		if lastShow > 0 { show = max(show, lastShow + interval / 2) }
+		lastShow = show
+		return show
+	}
+
+	private func balancedHold() -> Double {
+		// Cover all but the worst 3% of recent lateness. Grow at once, shrink slowly (about 6% a
+		// second), so a network that bursts every few seconds isn't caught out each time.
+		let sorted = lateness.sorted()
+		let target = sorted.isEmpty ? 0 : min(sorted[Int(Double(sorted.count - 1) * 0.97)], maxHold)
+		return target > hold ? target : max(target, hold * 0.999)
 	}
 }

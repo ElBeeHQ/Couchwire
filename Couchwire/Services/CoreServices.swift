@@ -13,7 +13,7 @@ func logFromCore(_ level: Int32, _ msg: UnsafePointer<CChar>?) {
 	}
 }
 
-private let cLog: CWLogCallback = { level, msg, _ in logFromCore(level, msg) }
+let cLog: CWLogCallback = { level, msg, _ in logFromCore(level, msg) }
 
 // MARK: - Discovery
 

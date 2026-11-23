@@ -66,7 +66,7 @@ struct PairingSheet: View {
 		.padding(24)
 		.frame(width: 440)
 		.sheet(isPresented: $signingIn) {
-			PSNSignInSheet { model.accountID = $0 }
+			PSNSignInSheet { model.signedIn($0) }
 		}
 	}
 

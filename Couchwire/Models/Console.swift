@@ -13,6 +13,16 @@ struct DiscoveredConsole: Identifiable, Hashable, Sendable {
 	let systemVersion: String
 	let runningApp: String?
 
+	init(hostID: String, name: String, address: String, state: State) {
+		self.hostID = hostID
+		self.name = name
+		self.address = address
+		isPS5 = true
+		self.state = state
+		systemVersion = ""
+		runningApp = nil
+	}
+
 	init(_ info: CWHostInfo) {
 		var info = info
 		hostID = cString(&info.host_id).uppercased()
@@ -39,6 +49,9 @@ struct RegisteredConsole: Codable, Identifiable, Hashable, Sendable {
 	let isPS5: Bool
 	/// PSN account id (base64) used when pairing; also sent on every session.
 	let accountID: String
+	/// Internet play: the console's PSN device id (64 hex characters), matched by name from the
+	/// consoles on the signed-in PSN account.
+	var psnDeviceID: String? = nil
 }
 
 /// Per-console preferences. Stream settings fall back to the app-wide defaults unless

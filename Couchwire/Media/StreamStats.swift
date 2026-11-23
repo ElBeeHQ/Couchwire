@@ -11,6 +11,8 @@ final class StreamStats: @unchecked Sendable {
 		var intervalMs: Double
 		var decodeMs: Double
 		var displayWaitMs: Double
+		/// Time since the previous frame was due on screen: what you actually see.
+		var shownIntervalMs: Double = 0
 	}
 
 	static let historyLength = 240
@@ -22,6 +24,17 @@ final class StreamStats: @unchecked Sendable {
 		var decodeMaxMs: Double = 0
 		var displayWaitAvgMs: Double = 0
 		var frameJitterMs: Double = 0
+		/// Share of frames that arrived more than a whole frame behind the stream's usual rhythm.
+		var lateFrameRatio: Double = 0
+		/// How long smoothing held frames back, on average.
+		var smoothingMs: Double = 0
+		/// Audio held in reserve against uneven arrival, and the gaps heard when it ran dry.
+		var audioBufferMs: Double = 0
+		var audioGaps = 0
+		/// Lost frames and audio gaps in the last 30 seconds, so a single old blip doesn't keep a
+		/// figure orange for the rest of the session.
+		var recentFramesLost = 0
+		var recentAudioGaps = 0
 		var refreshHz: Double = 0
 		var framesLost = 0
 		var decodeErrors = 0
@@ -51,7 +64,7 @@ final class StreamStats: @unchecked Sendable {
 		/// Controller polling plus our handling.
 		var controllerMs: Double { controllerPollMs + inputAvgMs }
 		/// Mac-side latency: from the whole frame arriving to it being on screen.
-		var clientMs: Double { decodeAvgMs + displayWaitAvgMs }
+		var clientMs: Double { decodeAvgMs + smoothingMs + displayWaitAvgMs }
 		/// Everything we can measure from button to photon: our input handling, the network
 		/// both ways (input up, video down) and the client side. Excludes the PS5's own game
 		/// frame and capture/encode time, which no client can see.
@@ -71,6 +84,7 @@ final class StreamStats: @unchecked Sendable {
 	private var lastInterval: Double = 0
 	private var history: [FrameSample] = []
 	private var historyHead = 0
+	private var lastShown: CFTimeInterval = 0
 	private var pings: [Double] = []
 	private var pingLostTotal = 0
 
@@ -87,10 +101,35 @@ final class StreamStats: @unchecked Sendable {
 		var inputMax: Double = 0
 		var inputCount = 0
 		var reports = 0
+		var leadSum: Double = 0
+		var leadCount = 0
 	}
 
-	init(codec: String) {
+	/// The stream's frame rate, for spotting late frames.
+	private let targetFps: Double
+
+	init(codec: String, fps: Int = 60) {
 		self.codec = codec
+		targetFps = Double(fps)
+	}
+
+	/// The latest frame is due on screen at `at` (host time).
+	func frameShown(at: CFTimeInterval) {
+		locked {
+			defer { lastShown = at }
+			guard lastShown > 0, !history.isEmpty else { return }
+			let latest = history.count < Self.historyLength ? history.count - 1
+				: (historyHead + Self.historyLength - 1) % Self.historyLength
+			history[latest].shownIntervalMs = (at - lastShown) * 1000
+		}
+	}
+
+	/// Smoothing scheduled a frame this far after it was decoded.
+	func frameScheduled(leadMs: Double) {
+		locked {
+			window.leadSum += leadMs
+			window.leadCount += 1
+		}
 	}
 
 	// MARK: Producers
@@ -202,7 +241,13 @@ final class StreamStats: @unchecked Sendable {
 				let mean = w.intervals.reduce(0, +) / Double(w.intervals.count)
 				let variance = w.intervals.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(w.intervals.count)
 				s.frameJitterMs = variance.squareRoot()
+				// Late against the stream's real rhythm, not its nominal rate: a 30 fps game in a
+				// 60 fps stream sends a frame every 33 ms, and that's on time.
+				let sorted = w.intervals.sorted()
+				let beat = max(sorted[sorted.count / 2], 1000 / targetFps)
+				s.lateFrameRatio = Double(w.intervals.filter { $0 > beat * 2 }.count) / Double(w.intervals.count)
 			}
+			s.smoothingMs = w.leadCount > 0 ? w.leadSum / Double(w.leadCount) : 0
 			s.refreshHz = vsyncDuration > 0 ? 1 / vsyncDuration : 0
 			s.framesLost = framesLostTotal
 			s.decodeErrors = decodeErrorsTotal

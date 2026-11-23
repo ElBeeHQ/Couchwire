@@ -28,12 +28,15 @@
   </picture>
 </p>
 
-Couchwire streams your PS5 to your Mac over your home network. It's built for macOS from the ground up, with full
+Couchwire streams your PS5 to your Mac, at home or over the internet. It's built for macOS from the ground up, with full
 DualSense support, HDR and low latency.
 
 ## Why Couchwire
 
 - **Up to 1080p at 60 fps,** in H.264, HEVC or HEVC with HDR on an HDR display, with the bitrate you choose.
+- **Play away from home** over the internet, through your PlayStation Network account. No port forwarding needed.
+- **Adjusts to your connection.** Each stream starts at the quality your connection can handle and learns from every
+  session, while smoothing evens out frames and sound that arrive unevenly.
 - **The DualSense, in full:** rumble, adaptive triggers, haptics over USB, the light bar, the PS button and the mute
   button. DualShock 4, Xbox and other controllers and the keyboard work too.
 - **Voice chat** through your Mac's microphone, switched on and off with the DualSense's mute button.
@@ -41,7 +44,8 @@ DualSense support, HDR and low latency.
   menu bar without opening a window.
 - **Guided setup** for the PS5's settings, your PlayStation Network sign-in and pairing, explained step by step.
 - **Private by design.** No account, analytics, ads or tracking. You sign in on Sony's own page, your password never
-  reaches Couchwire, and only your Account ID is kept.
+  reaches Couchwire, and only your Account ID is kept. If you turn on Internet Play, Couchwire stays signed in to
+  PlayStation Network, with the sign-in kept in your Mac's Keychain; turning it off signs out and deletes it.
 - **Updates itself,** from this page, checked against Couchwire's signing key.
 
 ## Download
@@ -56,7 +60,8 @@ DualSense support, HDR and low latency.
    open **System Settings › Privacy & Security**, scroll to the message about Couchwire and click **Open Anyway**.
 3. Follow the setup: turn on Remote Play on your PS5, sign in to PlayStation Network and pair with the code on your TV.
 
-Needs macOS 14 or later on Apple silicon, a PS5 on the same network, and a PlayStation Network account. A wired
+Needs macOS 14 or later on Apple silicon, a PS5, and a PlayStation Network account. Pairing is done once on the same
+network; after that you can also play over the internet. Most VPNs block internet play. A wired
 connection on both the Mac and the PS5 gives the smoothest picture.
 
 ## Tips for the lowest latency
@@ -77,8 +82,9 @@ submodule under `Vendor/chiaki-ng`. Everything else is native Swift, SwiftUI and
 
 | Layer   | Implementation |
 |---------|----------------|
-| Video   | Annex-B → `CMSampleBuffer` → `AVSampleBufferDisplayLayer` (VideoToolbox hardware decode, no buffering), 10-bit for HDR |
-| Audio   | Opus (libchiaki) → ~20 ms ring buffer → `AVAudioEngine` source node with drift trimming; microphone on its own voice-processing engine |
+| Video   | Annex-B → `CMSampleBuffer` → `AVSampleBufferDisplayLayer` (VideoToolbox hardware decode), adaptive frame pacing only when arrival is uneven, 10-bit for HDR |
+| Audio   | Opus (libchiaki) → adaptive 20–150 ms jitter buffer → `AVAudioEngine` source node; microphone on its own voice-processing engine |
+| Network | Local discovery and wake; internet play through libchiaki's PSN hole punching with UPnP; automatic quality per connection type |
 | Input   | GameController framework plus raw DualSense HID for the PS and mute buttons, haptics, triggers and lights; any MFi or Xbox pad; keyboard |
 | System  | Game Mode opt-in, latency-critical activity (no App Nap), pairing keys in the login Keychain, Sparkle updates |
 

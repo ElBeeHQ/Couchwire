@@ -47,8 +47,8 @@ struct OnboardingView: View {
 		}
 		.frame(width: 580, height: 540)
 		.sheet(isPresented: $signingIn) {
-			PSNSignInSheet { id in
-				model.accountID = id
+			PSNSignInSheet { result in
+				model.signedIn(result)
 				// Signed in: nothing else to do on this step.
 				if step == .signIn {
 					Task { try? await Task.sleep(for: .seconds(1.2)); if step == .signIn { step = .pair } }

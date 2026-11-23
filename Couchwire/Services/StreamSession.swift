@@ -17,8 +17,41 @@ final class StreamSession {
 	}
 
 	private(set) var phase: Phase = .connecting
+	/// Internet play: how far the connection has got while `phase` is `.connecting`.
+	private(set) var internetStep: CWPSNStep?
+	/// Set for a session over the internet, nil for one on the home network.
+	let internet: InternetTarget?
+
+	/// Where to reach a console over the internet, via PSN.
+	struct InternetTarget {
+		let accessToken: String
+		/// The console's 32-byte PSN device id.
+		let deviceID: Data
+		let forcePortGuessing: Bool
+	}
 	/// Refreshed twice a second while streaming, for the performance overlay.
 	private(set) var stats = StreamStats.Snapshot()
+	/// What this session streams at.
+	let settings: StreamSettings
+	/// The kind of connection, for automatic quality.
+	let link: ConnectionQuality.Link
+	/// Whether automatic quality chose `settings` (and learns from this session).
+	let automaticQuality: Bool
+	/// How frames are smoothed out before showing. Changing it applies straight away.
+	var smoothing: SmoothingMode {
+		didSet { pacer?.mode = smoothing.resolved(for: link) }
+	}
+	@ObservationIgnored private let pacer: FramePacer?
+	/// The stream has kept stuttering for a while; the window offers lower quality.
+	private(set) var struggling = false
+	/// Why, once `struggling`.
+	private(set) var struggleReason: StruggleDetector.Reason = .late
+	/// The user closed the struggling banner without changing anything.
+	var strugglingDismissed = false
+	@ObservationIgnored private var detector = StruggleDetector()
+	@ObservationIgnored private var learned = false
+	/// Running totals of lost frames and audio gaps over the last 30 s.
+	@ObservationIgnored private var recentCounts: [(frames: Int, gaps: Int)] = []
 	/// Whether your voice is going to the console.
 	private(set) var micOn = false
 	/// Set when the mic couldn't start (no permission, no input device).
@@ -35,25 +68,54 @@ final class StreamSession {
 	@ObservationIgnored private var box: Unmanaged<MediaSink>?
 	@ObservationIgnored private var statsTimer: Timer?
 	@ObservationIgnored private var pinger: ConsolePinger?
+	/// Internet play: held while cw_session_psn_connect runs, so the session isn't freed under it.
+	@ObservationIgnored private let connecting = DispatchGroup()
 
-	init(console: RegisteredConsole, keys: ConsoleKeys, settings: StreamSettings) {
+	init(console: RegisteredConsole, keys: ConsoleKeys, settings: StreamSettings, link: ConnectionQuality.Link,
+		 automaticQuality: Bool, smoothing: SmoothingMode, internet: InternetTarget? = nil) {
 		self.console = console
+		self.internet = internet
+		self.settings = settings
+		self.link = link
+		self.automaticQuality = automaticQuality
+		self.smoothing = smoothing
+		// Frames carry host-clock times to show at, so the layer's clock must be the host clock. Always
+		// set up, so smoothing can be switched on and off mid-stream.
+		if let timebase = try? CMTimebase(sourceClock: .hostTimeClock) {
+			try? timebase.setTime(CMClock.hostTimeClock.time)
+			try? timebase.setRate(1)
+			displayLayer.controlTimebase = timebase
+			pacer = FramePacer(fps: settings.fps, maxHold: FramePacer.maxHold(for: link), mode: smoothing.resolved(for: link))
+		} else {
+			pacer = nil
+		}
 		displayLayer.videoGravity = .resizeAspect
 		displayLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
 		if settings.codec == .hevcHDR {
 			// Let PQ/HLG frames use the display's extra brightness headroom (EDR).
 			displayLayer.wantsExtendedDynamicRangeContent = true
 		}
-		// No control timebase: samples are flagged DisplayImmediately and shown on decode.
-		let collector = StreamStats(codec: settings.codec.rawValue)
+		// Without a control timebase, samples are flagged DisplayImmediately and shown on decode.
+		let collector = StreamStats(codec: settings.codec.rawValue, fps: settings.fps)
 		statsCollector = collector
 		media = MediaSink(
 			decoder: VideoDecoder(codec: settings.codec.isHEVC ? .hevc : .h264, hdr: settings.codec == .hevcHDR,
-								  renderer: displayLayer.sampleBufferRenderer, stats: collector),
+								  renderer: displayLayer.sampleBufferRenderer, stats: collector,
+								  pacer: pacer),
 			stats: collector)
 		media.owner = self
+		media.audio.minimumLatency = internet == nil ? 0.02 : 0.06
+		media.audio.maximumLatency = link == .internetMobile ? 0.25 : 0.15
 
 		var cfg = CWSessionConfig()
+		// Kept until cw_session_create returns; libchiaki copies what it needs.
+		let token = internet.map { strdup($0.accessToken) }
+		defer { token.map { free($0) } }
+		if let internet, let token {
+			cfg.psn_token = UnsafePointer(token)
+			withUnsafeMutableBytes(of: &cfg.psn_duid) { dst in internet.deviceID.prefix(32).copyBytes(to: dst.bindMemory(to: UInt8.self).baseAddress!, count: min(32, internet.deviceID.count)) }
+			cfg.psn_force_port_guessing = internet.forcePortGuessing
+		}
 		let host = strdup(console.lastAddress)
 		defer { free(host) }
 		cfg.host = UnsafePointer(host)
@@ -117,6 +179,10 @@ final class StreamSession {
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
 			sink.input?.lightbar(r: r, g: g, b: b)
 		}
+		callbacks.psn_progress = { step, user in
+			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			Task { @MainActor in sink.owner?.internetProgress(CWPSNStep(UInt32(step))) }
+		}
 		callbacks.player_index = { index, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
 			sink.input?.playerIndex(index)
@@ -159,10 +225,43 @@ final class StreamSession {
 		activity = ProcessInfo.processInfo.beginActivity(
 			options: [.userInitiated, .latencyCritical, .idleDisplaySleepDisabled],
 			reason: "Remote Play streaming")
+		if internet != nil {
+			// Finding the console through PSN and opening a connection blocks for up to a minute.
+			internetStep = CW_PSN_STEP_ROUTER
+			connecting.enter()
+			DispatchQueue.global(qos: .userInitiated).async { [connecting] in
+				let err = cw_session_psn_connect(h)
+				connecting.leave()
+				Task { @MainActor [weak self] in self?.internetConnectFinished(err) }
+			}
+			return
+		}
 		let err = cw_session_start(h)
 		if err != 0 {
 			phase = .ended(error: "Couldn’t start session: \(String(cString: cw_error_string(err)))")
 		}
+	}
+
+	private func internetProgress(_ step: CWPSNStep) {
+		if phase == .connecting { internetStep = step }
+	}
+
+	private func internetConnectFinished(_ err: Int32) {
+		guard err != 0, phase == .connecting else { return }
+		let name = console.nickname
+		let message: String? = switch err {
+		case CW_ERR_CANCELED: nil
+		case CW_ERR_HOST_DOWN:
+			"\(name) didn’t answer over the internet. Check it’s switched on or in rest mode with “Stay Connected to the Internet” on, and signed in to your PSN account."
+		case CW_ERR_HOST_UNREACH where PathWatcher.shared.usesVPN:
+			"Couldn’t open a connection to \(name) while a VPN is on. Most VPNs block the direct connection Remote Play needs. Turn the VPN off, or exclude Couchwire from it, then try again."
+		case CW_ERR_HOST_UNREACH:
+			"Couldn’t open a connection to \(name) through these networks. Turn on “Try harder on difficult networks” in Settings › Internet Play, or try another network."
+		default:
+			"Couldn’t connect to \(name) over the internet (\(String(cString: cw_error_string(err))))."
+		}
+		phase = .ended(error: message)
+		teardown()
 	}
 
 	func submitPIN(_ pin: String) {
@@ -213,9 +312,12 @@ final class StreamSession {
 	private func didConnect() {
 		phase = .streaming
 		startStatsTimer()
-		let collector = statsCollector
-		pinger = ConsolePinger(address: console.lastAddress) { collector.ping($0) }
-		pinger?.start()
+		// The live ping goes to the console's home address, which only answers on the home network.
+		if internet == nil {
+			let collector = statsCollector
+			pinger = ConsolePinger(address: console.lastAddress) { collector.ping($0) }
+			pinger?.start()
+		}
 		input?.start()
 	}
 
@@ -239,7 +341,9 @@ final class StreamSession {
 			return
 		}
 		var error = error
-		if phase == .connecting, Self.notReadyReasons.contains(reason) {
+		if reason == 13 { // PSN_REGIST_FAILED
+			error = "\(console.nickname) didn’t accept this Mac over the internet. Make sure you signed in to Internet Play with the PSN account you use on it."
+		} else if phase == .connecting, Self.notReadyReasons.contains(reason) {
 			error = "\(console.nickname) isn’t ready to stream yet. Wait a moment, then press Play again."
 		}
 		if let e = error, e.contains("AvCap failed to initialize video") {
@@ -266,10 +370,35 @@ final class StreamSession {
 		cw_session_get_stats(handle, &net)
 		snapshot.rttMs = net.rtt_ms
 		snapshot.packetLoss = net.packet_loss
+		if let audio = media.audio.status {
+			snapshot.audioBufferMs = audio.targetMs
+			snapshot.audioGaps = audio.gaps
+		}
+		recentCounts.append((snapshot.framesLost + snapshot.decodeErrors, snapshot.audioGaps))
+		if recentCounts.count > 60 { recentCounts.removeFirst() } // 30 s of half-second samples
+		if let oldest = recentCounts.first {
+			snapshot.recentFramesLost = snapshot.framesLost + snapshot.decodeErrors - oldest.frames
+			snapshot.recentAudioGaps = snapshot.audioGaps - oldest.gaps
+		}
 		stats = snapshot
+		detector.add(snapshot)
+		if detector.struggling, !struggling {
+			struggleReason = detector.reason
+			struggling = true
+		}
 	}
 
+	/// Don't learn from this session when it ends: the caller already has.
+	func skipLearning() { learned = true }
+
+	/// How the stream went, for automatic quality to learn from. Nil if it was too short to tell.
+	var outcome: ConnectionQuality.Outcome? { detector.outcome }
+
 	private func teardown() {
+		if automaticQuality, let outcome = detector.outcome, !learned {
+			learned = true
+			ConnectionQuality.record(outcome, link: link)
+		}
 		statsTimer?.invalidate()
 		statsTimer = nil
 		pinger?.stop()
@@ -281,12 +410,16 @@ final class StreamSession {
 		micOn = false
 		if let activity { ProcessInfo.processInfo.endActivity(activity) }
 		activity = nil
+		internetStep = nil
 		guard let h = handle else { return }
 		handle = nil
 		let box = self.box
 		self.box = nil
+		// Stop an internet connection that's still being set up; it must finish before the free.
+		if internet != nil { cw_session_psn_cancel(h) }
 		// cw_session_free joins libchiaki's thread; never do that on the main thread.
-		DispatchQueue.global(qos: .userInitiated).async {
+		DispatchQueue.global(qos: .userInitiated).async { [connecting] in
+			connecting.wait()
 			cw_session_free(h)
 			box?.release()
 		}

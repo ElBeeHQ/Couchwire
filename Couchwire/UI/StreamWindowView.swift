@@ -35,6 +35,17 @@ struct StreamWindowView: View {
 						.padding(.top, controlsVisible ? controlsTop + 72 : 0)
 				}
 			}
+			.overlay(alignment: .bottom) {
+				if let session = model.session, session.phase == .streaming, session.struggling,
+				   !session.strugglingDismissed, model.canLowerQuality(session) {
+					StrugglingBanner(
+						reason: session.struggleReason,
+						lower: { Task { _ = await model.reconnectAtLowerQuality() } },
+						dismiss: { session.strugglingDismissed = true })
+					.padding(24)
+					.transition(.move(edge: .bottom).combined(with: .opacity))
+				}
+			}
 			.overlay {
 				if let session = model.session, session.phase == .streaming {
 					controls(for: session)
@@ -113,7 +124,21 @@ struct StreamWindowView: View {
 		case .connecting:
 			StatusPanel {
 				ProgressView().controlSize(.large)
-				Text("Connecting to \(session.console.nickname)…")
+				if session.internet != nil {
+					Text("Connecting to \(session.console.nickname) over the internet")
+						.multilineTextAlignment(.center)
+					Text(internetStepText(session.internetStep))
+						.font(.callout)
+						.foregroundStyle(.secondary)
+						.multilineTextAlignment(.center)
+					Button("Cancel") {
+						model.endSession()
+						dismissWindow(id: "stream")
+					}
+					.keyboardShortcut(.cancelAction)
+				} else {
+					Text("Connecting to \(session.console.nickname)…")
+				}
 			}
 		case .needsPIN(let incorrect):
 			PINPrompt(incorrect: incorrect) { session.submitPIN($0) }
@@ -132,6 +157,51 @@ struct StreamWindowView: View {
 		case .streaming:
 			EmptyView()
 		}
+	}
+}
+
+/// What an internet connection is doing, for the Connecting panel. It can take up to a minute.
+private func internetStepText(_ step: CWPSNStep?) -> String {
+	switch step {
+	case CW_PSN_STEP_SESSION: "Contacting PlayStation Network…"
+	case CW_PSN_STEP_CONSOLE: "Waking your PS5 and asking it to join…"
+	case CW_PSN_STEP_CONNECTION: "Opening a direct connection…"
+	case CW_PSN_STEP_STREAM: "Starting the stream…"
+	default: "Getting ready…"
+	}
+}
+
+/// Shown when the stream keeps stuttering: offers to reconnect at lower quality.
+private struct StrugglingBanner: View {
+	let reason: StruggleDetector.Reason
+	let lower: () -> Void
+	let dismiss: () -> Void
+
+	var body: some View {
+		HStack(spacing: 14) {
+			Image(systemName: "wifi.exclamationmark")
+				.font(.title2)
+				.foregroundStyle(.orange)
+			VStack(alignment: .leading, spacing: 2) {
+				Text("Your connection is struggling").font(.headline)
+				Text((reason == .loss ? "Video is getting lost on the way." : "Frames are arriving late and unevenly.")
+					 + " Lower the quality for a smoother picture. The stream restarts, which takes a few seconds.")
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+			Button("Lower Quality", action: lower)
+				.buttonStyle(.borderedProminent)
+			Button(action: dismiss) {
+				Image(systemName: "xmark")
+			}
+			.buttonStyle(.borderless)
+			.help("Keep this quality")
+		}
+		.padding(16)
+		.frame(maxWidth: 560)
+		.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+		.environment(\.colorScheme, .dark)
 	}
 }
 

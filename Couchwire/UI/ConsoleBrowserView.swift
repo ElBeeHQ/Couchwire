@@ -20,6 +20,7 @@ struct ConsoleBrowserView: View {
 								subtitle: subtitle(for: console),
 								state: model.discoveredState(of: console)?.state,
 								waking: model.waking.contains(console.hostID),
+								internet: model.playsOverInternet(console),
 								busy: connecting == console.hostID || model.waking.contains(console.hostID),
 								actionTitle: "Play",
 								settings: { editing = console }
@@ -92,6 +93,7 @@ struct ConsoleBrowserView: View {
 	private func subtitle(for console: RegisteredConsole) -> String {
 		// While waking the PS5 drops off the network for a few seconds; that isn't "Offline".
 		if model.waking.contains(console.hostID) { return "Waking up…" }
+		if model.playsOverInternet(console) { return "Away · Play over the internet" }
 		guard let d = model.discoveredState(of: console) else { return "Offline · \(console.lastAddress)" }
 		if let app = d.runningApp { return app }
 		return d.state == .standby ? "Rest Mode" : "Ready"
@@ -129,6 +131,7 @@ struct ConsoleCard: View {
 	let subtitle: String
 	let state: DiscoveredConsole.State?
 	var waking = false
+	var internet = false
 	let busy: Bool
 	let actionTitle: String
 	var settings: (() -> Void)? = nil
@@ -179,6 +182,7 @@ struct ConsoleCard: View {
 	@ViewBuilder private var statusBadge: some View {
 		let (label, color): (String, Color) = switch (waking, state) {
 		case (true, _): ("Waking", .orange)
+		case (_, nil) where internet: ("Internet", .blue)
 		case (_, .ready): ("On", .green)
 		case (_, .standby): ("Rest Mode", .orange)
 		case (_, .unknown): ("Unknown", .gray)

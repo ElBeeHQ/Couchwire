@@ -3,7 +3,7 @@ import os
 
 /// Plays the decoded PCM stream through AVAudioEngine. A small ring buffer sits between
 /// libchiaki's network thread (producer) and the real-time render callback (consumer),
-/// keeping latency at roughly two Opus frames.
+/// keeping just enough in reserve to cover the network's unevenness.
 final class AudioPlayer: @unchecked Sendable {
 	private let engine = AVAudioEngine()
 	private var sourceNode: AVAudioSourceNode?
@@ -11,6 +11,17 @@ final class AudioPlayer: @unchecked Sendable {
 	/// Runs on its own engine; see MicrophoneCapture.
 	let microphone = MicrophoneCapture()
 	private let log = Logger(subsystem: "Couchwire", category: "Audio")
+
+	/// The smallest audio reserve. More over the internet, where packets arrive less evenly.
+	var minimumLatency: TimeInterval = 0.02
+	/// The largest it may grow to. Mobile networks need more.
+	var maximumLatency: TimeInterval = 0.15
+	private var sampleRate: Double = 48_000
+
+	/// The reserve now and how many gaps there have been, for the stats panel.
+	var status: (bufferedMs: Double, targetMs: Double, gaps: Int)? {
+		ring?.status(sampleRate: sampleRate)
+	}
 
 	var volume: Float {
 		get { engine.mainMixerNode.outputVolume }
@@ -23,9 +34,10 @@ final class AudioPlayer: @unchecked Sendable {
 			engine.detach(sourceNode)
 			self.sourceNode = nil
 		}
-		// ~100 ms of capacity; we trim to a low target latency on underrun/overrun.
-		let ring = PCMRingBuffer(capacity: Int(sampleRate / 10) * channels, channels: channels)
+		let ring = PCMRingBuffer(sampleRate: sampleRate, channels: channels,
+								 minimum: minimumLatency, maximum: maximumLatency)
 		self.ring = ring
+		self.sampleRate = sampleRate
 
 		guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
 										 channels: AVAudioChannelCount(channels), interleaved: false) else { return }
@@ -86,21 +98,52 @@ final class AudioPlayer: @unchecked Sendable {
 }
 
 /// Single-producer/single-consumer interleaved Int16 ring buffer that de-interleaves to
-/// Float32 on read. Guarded by an unfair lock; critical sections are tiny memcpy-like loops.
+/// Float32 on read, with an adaptive reserve (jitter buffer). Guarded by an unfair lock;
+/// critical sections are tiny memcpy-like loops.
+///
+/// The reserve starts at `minimum` and grows by 20 ms each time it runs dry (a gap you'd hear),
+/// up to `maximum`. After 10 s without a gap it shrinks by 5 ms, back towards `minimum`. A backlog
+/// is worked off by playing about 2% faster, which you can't hear, rather than by skipping ahead.
 final class PCMRingBuffer: @unchecked Sendable {
 	private var storage: [Int16]
 	private var readIndex = 0
+	/// Samples (not frames) buffered.
 	private var count = 0
 	private let channels: Int
 	private var lock = os_unfair_lock()
 	private var primed = false
-	/// Start playback only once ~20 ms is buffered, to absorb network jitter.
-	private let primeThreshold: Int
 
-	init(capacity: Int, channels: Int) {
-		storage = [Int16](repeating: 0, count: capacity)
+	private let minTarget: Int
+	private let maxTarget: Int
+	private let step: Int
+	private let shrinkStep: Int
+	private let calmFrames: Int
+	/// Frames to have buffered before playing.
+	private var target: Int
+	private var framesPlayed = 0
+	private var lastChange = 0
+	private var skipPhase = 0
+	private var underrunsTotal = 0
+	/// Ramps the first few frames after a gap up from silence, so restarts don't click.
+	private var fadeIn = 0
+
+	init(sampleRate: Double, channels: Int, minimum: TimeInterval, maximum: TimeInterval) {
 		self.channels = channels
-		primeThreshold = capacity / 5
+		// Room for 1 s, far beyond the largest reserve.
+		storage = [Int16](repeating: 0, count: Int(sampleRate) * channels)
+		minTarget = Int(sampleRate * minimum)
+		maxTarget = Int(sampleRate * maximum)
+		step = Int(sampleRate * 0.02)
+		shrinkStep = Int(sampleRate * 0.005)
+		calmFrames = Int(sampleRate * 10)
+		target = minTarget
+	}
+
+	/// The reserve now, in ms, and how many gaps there have been.
+	func status(sampleRate: Double) -> (bufferedMs: Double, targetMs: Double, gaps: Int) {
+		os_unfair_lock_lock(&lock)
+		defer { os_unfair_lock_unlock(&lock) }
+		return (Double(count / channels) / sampleRate * 1000, Double(target) / sampleRate * 1000, underrunsTotal)
 	}
 
 	func write(_ samples: UnsafeBufferPointer<Int16>) {
@@ -115,12 +158,11 @@ final class PCMRingBuffer: @unchecked Sendable {
 			storage[(readIndex + count) % cap] = s
 			count += 1
 		}
-		// Latency cap: if a network burst piled up more than ~3x the target, skip ahead
-		// to the target instead of letting audio drift behind the video.
-		let maxBuffered = primeThreshold * 3
-		if count > maxBuffered {
-			var drop = count - primeThreshold
-			drop -= drop % channels
+		// Hopelessly behind (a long stall, then everything at once): skip to the reserve rather
+		// than play seconds late.
+		let frames = count / channels
+		if frames > target + maxTarget * 2 {
+			let drop = (frames - target) * channels
 			readIndex = (readIndex + drop) % cap
 			count -= drop
 		}
@@ -129,23 +171,47 @@ final class PCMRingBuffer: @unchecked Sendable {
 	func read(into abl: UnsafeMutableAudioBufferListPointer, frames: Int) {
 		os_unfair_lock_lock(&lock)
 		defer { os_unfair_lock_unlock(&lock) }
-		if !primed && count >= primeThreshold { primed = true }
 		let cap = storage.count
 		for frame in 0..<frames {
-			let available = primed && count >= channels
-			for ch in 0..<min(channels, abl.count) {
-				let out = abl[ch].mData!.assumingMemoryBound(to: Float.self)
-				if available {
-					out[frame] = Float(storage[(readIndex + ch) % cap]) / 32768.0
-				} else {
-					out[frame] = 0
-				}
+			if !primed && count / channels >= target {
+				primed = true
+				fadeIn = 64
 			}
+			let available = primed && count >= channels
 			if available {
+				let gain: Float = fadeIn > 0 ? Float(64 - fadeIn) / 64 : 1
+				if fadeIn > 0 { fadeIn -= 1 }
+				for ch in 0..<min(channels, abl.count) {
+					abl[ch].mData!.assumingMemoryBound(to: Float.self)[frame] =
+						Float(storage[(readIndex + ch) % cap]) / 32768.0 * gain
+				}
 				readIndex = (readIndex + channels) % cap
 				count -= channels
+				// Well over the reserve: drop one frame in 50 to catch up gently.
+				if count / channels > target * 2 + step {
+					skipPhase += 1
+					if skipPhase >= 50, count >= channels {
+						skipPhase = 0
+						readIndex = (readIndex + channels) % cap
+						count -= channels
+					}
+				}
 			} else {
-				primed = false // underrun: re-prime
+				for ch in 0..<min(channels, abl.count) {
+					abl[ch].mData!.assumingMemoryBound(to: Float.self)[frame] = 0
+				}
+				if primed {
+					// Ran dry: a gap. Keep more in reserve from now on.
+					primed = false
+					underrunsTotal += 1
+					target = min(target + step, maxTarget)
+					lastChange = framesPlayed
+				}
+			}
+			framesPlayed += 1
+			if framesPlayed - lastChange > calmFrames, target > minTarget {
+				target = max(target - shrinkStep, minTarget)
+				lastChange = framesPlayed
 			}
 		}
 	}

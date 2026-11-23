@@ -55,6 +55,7 @@ struct MenuBarContent: View {
 	private func status(of console: RegisteredConsole) -> String {
 		if model.waking.contains(console.hostID) { return "Waking…" }
 		if model.session?.console.hostID == console.hostID { return "Streaming" }
+		if model.playsOverInternet(console) { return "Over the Internet" }
 		guard let d = model.discoveredState(of: console) else { return "Offline" }
 		switch d.state {
 		case .ready: return d.runningApp.map { "On · \($0)" } ?? "On"

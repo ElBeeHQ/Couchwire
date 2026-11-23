@@ -107,6 +107,15 @@ typedef struct {
 	unsigned int bitrate_kbps;
 	CWCodec codec;
 	bool enable_dualsense;
+	/// Internet play: a PSN OAuth access token. NULL for a LAN session (`host`, `regist_key` and
+	/// `morning` are then used). When set, `host` is ignored, the console is registered afresh
+	/// over PSN on every connect, and the session must be connected with cw_session_psn_connect.
+	const char *psn_token;
+	/// Internet play: the console's 32-byte PSN device id (from cw_psn_list_devices).
+	uint8_t psn_duid[32];
+	/// Internet play: guess ports even when the NAT looks friendly. Helps with double NAT and
+	/// some mobile hotspots; slower.
+	bool psn_force_port_guessing;
 } CWSessionConfig;
 
 typedef struct {
@@ -129,7 +138,19 @@ typedef struct {
 	void (*led_color)(uint8_t r, uint8_t g, uint8_t b, void *user);
 	/// Player number (1-based as sent by the console), shown on the player LEDs.
 	void (*player_index)(uint8_t index, void *user);
+	/// Internet play: progress through cw_session_psn_connect (a CWPSNStep). Called on the
+	/// connecting thread, then on libchiaki's session thread for the data channel.
+	void (*psn_progress)(int step, void *user);
 } CWSessionCallbacks;
+
+/// Steps of an internet connection, in order.
+typedef enum {
+	CW_PSN_STEP_ROUTER = 0,        // asking the router to open a port (UPnP)
+	CW_PSN_STEP_SESSION = 1,       // creating a Remote Play session on PSN
+	CW_PSN_STEP_CONSOLE = 2,       // asking the console to join (this also wakes it)
+	CW_PSN_STEP_CONNECTION = 3,    // opening a direct connection through both networks
+	CW_PSN_STEP_STREAM = 4,        // connected; registering and starting the stream
+} CWPSNStep;
 
 /// Mirrors ChiakiControllerState. Axes are -32768...32767 (Y down positive, as on DualSense).
 typedef struct {
@@ -174,6 +195,16 @@ int cw_session_stop(CWSession *session);
 /// Blocks until the session thread exits, then frees everything.
 void cw_session_free(CWSession *session);
 int cw_session_set_controller(CWSession *session, const CWControllerState *state);
+
+/// Internet play: finds the console through PSN, opens a connection to it and starts the session
+/// (so don't also call cw_session_start). Blocks for up to a minute or more; call it off the main
+/// thread, and wait for it to return before cw_session_free. Returns 0 on success, otherwise a
+/// ChiakiErrorCode: CW_ERR_HOST_DOWN if the console never joined (asleep without network wake, off,
+/// or signed in to a different account), CW_ERR_HOST_UNREACH if no direct connection could be made
+/// (the network type blocks it), CW_ERR_CANCELED after cw_session_psn_cancel.
+int cw_session_psn_connect(CWSession *session);
+/// Stops cw_session_psn_connect early. Safe from any thread.
+void cw_session_psn_cancel(CWSession *session);
 int cw_session_set_login_pin(CWSession *session, const char *pin);
 
 #define CW_MIC_SAMPLE_RATE 48000
@@ -195,6 +226,28 @@ typedef struct {
 
 /// Snapshot of libchiaki's network statistics. Cheap; safe to call at any time.
 void cw_session_get_stats(CWSession *session, CWNetworkStats *out);
+
+// MARK: - PSN
+
+#define CW_ERR_CANCELED 14
+#define CW_ERR_HOST_DOWN 8
+#define CW_ERR_HOST_UNREACH 9
+
+typedef struct {
+	char name[32];
+	uint8_t duid[32];
+	bool remote_play_enabled;
+} CWPSNDevice;
+
+/// Lists the PS5s on the PSN account the access token belongs to. Blocks on the network (about 5 s
+/// at most); call it off the main thread. Free the list with cw_psn_free_devices.
+int cw_psn_list_devices(const char *access_token, CWPSNDevice **devices_out, size_t *count_out,
+		CWLogCallback log_cb, void *user);
+void cw_psn_free_devices(CWPSNDevice *devices);
+
+#define CW_PSN_CLIENT_DUID_SIZE 49
+/// A fresh client device id for the PSN sign-in URL's `duid` parameter (needed for internet play).
+void cw_psn_generate_client_duid(char out[CW_PSN_CLIENT_DUID_SIZE]);
 
 /// Returns the controller-state idle value (sticks centred, orientation identity).
 CWControllerState cw_controller_idle(void);

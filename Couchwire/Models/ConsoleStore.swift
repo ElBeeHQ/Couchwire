@@ -16,7 +16,11 @@ enum ConsoleStore {
 		return (try? JSONDecoder().decode([RegisteredConsole].self, from: data)) ?? []
 	}
 
+	/// Demo mode (`-CouchwireDemo YES`) never writes over your real consoles, settings or keys.
+	private static var isDemo: Bool { UserDefaults.standard.bool(forKey: "CouchwireDemo") }
+
 	static func saveConsoles(_ consoles: [RegisteredConsole]) {
+		guard !isDemo else { return }
 		UserDefaults.standard.set(try? JSONEncoder().encode(consoles), forKey: consolesKey)
 	}
 
@@ -27,6 +31,7 @@ enum ConsoleStore {
 	}
 
 	static func saveSettings(_ s: StreamSettings) {
+		guard !isDemo else { return }
 		UserDefaults.standard.set(try? JSONEncoder().encode(s), forKey: settingsKey)
 	}
 
@@ -36,17 +41,19 @@ enum ConsoleStore {
 	}
 
 	static func saveProfiles(_ profiles: [String: ConsoleProfile]) {
+		guard !isDemo else { return }
 		UserDefaults.standard.set(try? JSONEncoder().encode(profiles), forKey: profilesKey)
 	}
 
 	static var accountID: String {
 		get { UserDefaults.standard.string(forKey: accountKey) ?? "" }
-		set { UserDefaults.standard.set(newValue, forKey: accountKey) }
+		set { if !isDemo { UserDefaults.standard.set(newValue, forKey: accountKey) } }
 	}
 
 	// MARK: Keychain
 
 	static func saveKeys(_ keys: ConsoleKeys, for hostID: String) {
+		guard !isDemo else { return }
 		guard let data = try? JSONEncoder().encode(keys) else { return }
 		let query: [String: Any] = [
 			kSecClass as String: kSecClassGenericPassword,
@@ -74,6 +81,7 @@ enum ConsoleStore {
 	}
 
 	static func deleteKeys(for hostID: String) {
+		guard !isDemo else { return }
 		let query: [String: Any] = [
 			kSecClass as String: kSecClassGenericPassword,
 			kSecAttrService as String: keychainService,

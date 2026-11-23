@@ -1,10 +1,10 @@
 import Foundation
 
-/// Resolves the PSN account ID needed for Remote Play pairing by signing in to PlayStation
-/// Network with the Remote Play app's OAuth client (same flow as the official app).
+/// Signs in to PlayStation Network with the Remote Play app's OAuth client (same flow as the
+/// official app) to get the PSN account ID needed for pairing, and the tokens internet play needs.
 ///
-/// Only the resulting account ID is kept. Tokens are discarded immediately and the sign-in
-/// web view uses a non-persistent data store, so no PSN session outlives the sheet.
+/// The sign-in web view uses a non-persistent data store. The caller decides whether to keep the
+/// tokens: only with Internet Play on (see PSNTokens); otherwise they're dropped straight away.
 enum PSNAuth {
 	static let redirectURI = "https://remoteplay.dl.playstation.net/remoteplay/redirect"
 	private static let clientID = "ba495a24-818c-472b-b12d-ff231c1b5745"
@@ -13,9 +13,10 @@ enum PSNAuth {
 	private static let scope = "psn:clientapp referenceDataService:countryConfig.read pushNotification:webSocket.desktop.connect sessionManager:remotePlaySession.system.update"
 
 	enum Failure: LocalizedError {
-		case badRedirect, server(String), malformed
+		case badRedirect, server(String), malformed, signInExpired
 		var errorDescription: String? {
 			switch self {
+			case .signInExpired: "Your PlayStation Network sign-in has expired. Sign in again in Settings › Internet Play."
 			case .badRedirect: "Sign-in didn’t return an authorization code. Please try again."
 			case .server(let msg): "PlayStation Network returned an error: \(msg)"
 			case .malformed: "PlayStation Network sent a response Couchwire couldn’t read."
@@ -38,6 +39,9 @@ enum PSNAuth {
 			.init(name: "smcid", value: "remoteplay"),
 			.init(name: "prompt", value: "always"),
 			.init(name: "PlatformPrivacyWs1", value: "minimal"),
+			// A fresh client device id per sign-in; tokens for internet play must come from a sign-in
+			// that carried one (chiaki-ng's holepunch.h).
+			.init(name: "duid", value: clientDUID()),
 		]
 		return c.url!
 	}
@@ -46,29 +50,29 @@ enum PSNAuth {
 		url.absoluteString.hasPrefix(redirectURI)
 	}
 
-	/// Extracts the `code` from the redirect, exchanges it for a token, and looks up the user ID.
-	static func accountID(fromRedirect url: URL) async throws -> String {
+	/// The result of signing in: the account ID for pairing and the tokens for internet play.
+	struct SignIn {
+		let accountID: String
+		let credentials: PSNCredentials
+	}
+
+	/// Extracts the `code` from the redirect, exchanges it for tokens, and looks up the user ID.
+	static func signIn(fromRedirect url: URL) async throws -> SignIn {
 		guard let code = URLComponents(url: url, resolvingAgainstBaseURL: false)?
 			.queryItems?.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
 			throw Failure.badRedirect
 		}
 
-		// 1. Authorization code → access token
-		var tokenRequest = URLRequest(url: tokenURL)
-		tokenRequest.httpMethod = "POST"
-		tokenRequest.setValue(basicAuth, forHTTPHeaderField: "Authorization")
-		tokenRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-		tokenRequest.httpBody = formEncode([
+		// 1. Authorization code → tokens
+		let credentials = try await tokens([
 			"grant_type": "authorization_code",
 			"code": code,
 			"scope": scope,
 			"redirect_uri": redirectURI,
 		])
-		let token = try await json(for: tokenRequest)
-		guard let accessToken = token["access_token"] as? String else { throw Failure.malformed }
 
 		// 2. Token info → numeric user_id
-		var infoRequest = URLRequest(url: tokenURL.appendingPathComponent(accessToken))
+		var infoRequest = URLRequest(url: tokenURL.appendingPathComponent(credentials.accessToken))
 		infoRequest.setValue(basicAuth, forHTTPHeaderField: "Authorization")
 		infoRequest.setValue("application/json", forHTTPHeaderField: "Accept")
 		let info = try await json(for: infoRequest)
@@ -77,7 +81,41 @@ enum PSNAuth {
 
 		// 3. Account ID = user_id as 8 little-endian bytes, Base64-encoded.
 		var le = userID.littleEndian
-		return Data(bytes: &le, count: 8).base64EncodedString()
+		return SignIn(accountID: Data(bytes: &le, count: 8).base64EncodedString(), credentials: credentials)
+	}
+
+	/// New tokens from a refresh token. Throws `signInExpired` when PSN no longer accepts it.
+	static func refresh(_ refreshToken: String) async throws -> PSNCredentials {
+		do {
+			return try await tokens([
+				"grant_type": "refresh_token",
+				"refresh_token": refreshToken,
+				"scope": scope,
+				"redirect_uri": redirectURI,
+			])
+		} catch Failure.server(let message) where message.hasPrefix("HTTP 400") || message.contains("invalid") {
+			throw Failure.signInExpired
+		}
+	}
+
+	private static func tokens(_ form: [String: String]) async throws -> PSNCredentials {
+		var request = URLRequest(url: tokenURL)
+		request.httpMethod = "POST"
+		request.setValue(basicAuth, forHTTPHeaderField: "Authorization")
+		request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+		request.httpBody = formEncode(form)
+		let response = try await json(for: request)
+		guard let access = response["access_token"] as? String else { throw Failure.malformed }
+		let lifetime = (response["expires_in"] as? NSNumber)?.doubleValue ?? 3600
+		return PSNCredentials(accessToken: access,
+							  refreshToken: response["refresh_token"] as? String ?? form["refresh_token"] ?? "",
+							  expiry: Date().addingTimeInterval(lifetime))
+	}
+
+	private static func clientDUID() -> String {
+		var buffer = [CChar](repeating: 0, count: Int(CW_PSN_CLIENT_DUID_SIZE))
+		cw_psn_generate_client_duid(&buffer)
+		return String(cString: buffer)
 	}
 
 	// MARK: - Helpers
@@ -105,7 +143,8 @@ enum PSNAuth {
 		let (data, response) = try await session.data(for: request)
 		let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
 		if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-			let msg = (object?["error_description"] as? String) ?? (object?["error"] as? String) ?? "HTTP \(http.statusCode)"
+			let detail = (object?["error_description"] as? String) ?? (object?["error"] as? String) ?? ""
+			let msg = "HTTP \(http.statusCode)" + (detail.isEmpty ? "" : ": \(detail)")
 			throw Failure.server(msg)
 		}
 		guard let object else { throw Failure.malformed }

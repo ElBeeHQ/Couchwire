@@ -7,6 +7,7 @@
 #include <chiaki/opusencoder.h>
 #include <chiaki/regist.h>
 #include <chiaki/session.h>
+#include <chiaki/remote/holepunch.h>
 
 #include <arpa/inet.h>
 #include <ifaddrs.h>
@@ -287,7 +288,20 @@ struct CWSession {
 	CWSessionCallbacks cb;
 	char *host;
 	bool started;
+	/// Internet play only. Owned by `session` once chiaki_session_init succeeds (it finalizes it).
+	ChiakiHolepunchSession holepunch;
+	uint8_t psn_duid[32];
 };
+
+_Static_assert(CW_ERR_CANCELED == CHIAKI_ERR_CANCELED, "CW_ERR_CANCELED");
+_Static_assert(CW_ERR_HOST_DOWN == CHIAKI_ERR_HOST_DOWN, "CW_ERR_HOST_DOWN");
+_Static_assert(CW_ERR_HOST_UNREACH == CHIAKI_ERR_HOST_UNREACH, "CW_ERR_HOST_UNREACH");
+
+static void psn_progress(CWSession *s, CWPSNStep step)
+{
+	if(s->cb.psn_progress)
+		s->cb.psn_progress((int)step, s->cb.user);
+}
 
 static void session_event_cb(ChiakiEvent *event, void *user)
 {
@@ -318,6 +332,11 @@ static void session_event_cb(ChiakiEvent *event, void *user)
 		case CHIAKI_EVENT_PLAYER_INDEX:
 			if(s->cb.player_index)
 				s->cb.player_index(event->player_index, s->cb.user);
+			break;
+		case CHIAKI_EVENT_HOLEPUNCH:
+			// The data channel: the last step before the stream starts.
+			if(!event->data_holepunch.finished)
+				psn_progress(s, CW_PSN_STEP_STREAM);
 			break;
 		case CHIAKI_EVENT_QUIT:
 			if(s->cb.quit)
@@ -377,10 +396,28 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 		return NULL;
 	}
 	s->cb = callbacks;
-	s->host = strdup(config->host);
 	s->log_fwd.cb = callbacks.log;
 	s->log_fwd.user = callbacks.user;
 	chiaki_log_init(&s->log, CW_LOG_MASK, log_forward, &s->log_fwd);
+
+	bool internet = config->psn_token != NULL;
+	// Over the internet the address comes from the connection PSN sets up, not from us.
+	s->host = strdup(internet || !config->host ? "" : config->host);
+	if(internet)
+	{
+		s->holepunch = chiaki_holepunch_session_init(config->psn_token, &s->log);
+		if(!s->holepunch)
+		{
+			CHIAKI_LOGE(&s->log, "Couldn't start a PSN session");
+			free(s->host);
+			free(s);
+			if(err_out)
+				*err_out = CHIAKI_ERR_UNKNOWN;
+			return NULL;
+		}
+		chiaki_holepunch_session_force_port_guessing(s->holepunch, config->psn_force_port_guessing);
+		memcpy(s->psn_duid, config->psn_duid, sizeof(s->psn_duid));
+	}
 
 	ChiakiConnectInfo info = {0};
 	info.ps5 = config->ps5;
@@ -403,7 +440,8 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 	info.enable_dualsense = config->enable_dualsense;
 	info.audio_video_disabled = 0;
 	info.auto_regist = false;
-	info.holepunch_session = NULL;
+	// chiaki_session_init takes ownership: it finalizes the holepunch session, even on failure.
+	info.holepunch_session = s->holepunch;
 	info.rudp_sock = NULL;
 	info.packet_loss_max = 0.05;
 	info.enable_idr_on_fec_failure = true;
@@ -449,6 +487,59 @@ int cw_session_start(CWSession *s)
 	if(err == CHIAKI_ERR_SUCCESS)
 		s->started = true;
 	return (int)err;
+}
+
+int cw_session_psn_connect(CWSession *s)
+{
+	if(!s->holepunch)
+		return CHIAKI_ERR_UNINITIALIZED;
+	ChiakiHolepunchSession hp = s->holepunch;
+	ChiakiErrorCode err;
+
+	// The order chiaki-ng uses (lib/include/chiaki/remote/holepunch.h). UPnP is a bonus: it's
+	// fine for it to fail.
+	psn_progress(s, CW_PSN_STEP_ROUTER);
+	chiaki_holepunch_upnp_discover(hp);
+
+	psn_progress(s, CW_PSN_STEP_SESSION);
+	err = chiaki_holepunch_session_create(hp);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(&s->log, "PSN session create failed: %s", chiaki_error_string(err));
+		return (int)err;
+	}
+	err = holepunch_session_create_offer(hp);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(&s->log, "PSN offer failed: %s", chiaki_error_string(err));
+		return (int)err;
+	}
+
+	// Asking the console to join also wakes it from rest mode.
+	psn_progress(s, CW_PSN_STEP_CONSOLE);
+	err = chiaki_holepunch_session_start(hp, s->psn_duid, CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS5);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(&s->log, "Console didn't join the PSN session: %s", chiaki_error_string(err));
+		return (int)err;
+	}
+
+	psn_progress(s, CW_PSN_STEP_CONNECTION);
+	err = chiaki_holepunch_session_punch_hole(hp, CHIAKI_HOLEPUNCH_PORT_TYPE_CTRL);
+	if(err != CHIAKI_ERR_SUCCESS)
+	{
+		CHIAKI_LOGE(&s->log, "No direct connection to the console: %s", chiaki_error_string(err));
+		return (int)err;
+	}
+
+	// Registration over PSN and the data channel happen inside the session thread.
+	return cw_session_start(s);
+}
+
+void cw_session_psn_cancel(CWSession *s)
+{
+	if(s && s->holepunch)
+		chiaki_holepunch_main_thread_cancel(s->holepunch, false);
 }
 
 int cw_session_stop(CWSession *s)
@@ -566,4 +657,55 @@ CWControllerState cw_controller_idle(void)
 	out.orient_z = st.orient_z;
 	out.orient_w = st.orient_w;
 	return out;
+}
+
+// MARK: - PSN
+
+int cw_psn_list_devices(const char *access_token, CWPSNDevice **devices_out, size_t *count_out,
+		CWLogCallback log_cb, void *user)
+{
+	*devices_out = NULL;
+	*count_out = 0;
+	LogForward fwd = { .cb = log_cb, .user = user };
+	ChiakiLog log;
+	chiaki_log_init(&log, CW_LOG_MASK, log_forward, &fwd);
+
+	ChiakiHolepunchDeviceInfo *list = NULL;
+	size_t count = 0;
+	ChiakiErrorCode err = chiaki_holepunch_list_devices(access_token, CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS5, &list, &count, &log);
+	if(err != CHIAKI_ERR_SUCCESS)
+		return (int)err;
+	if(count > 0)
+	{
+		CWPSNDevice *out = calloc(count, sizeof(CWPSNDevice));
+		if(!out)
+		{
+			chiaki_holepunch_free_device_list(&list);
+			return CHIAKI_ERR_MEMORY;
+		}
+		for(size_t i = 0; i < count; i++)
+		{
+			memcpy(out[i].name, list[i].device_name, sizeof(out[i].name));
+			out[i].name[sizeof(out[i].name) - 1] = '\0';
+			memcpy(out[i].duid, list[i].device_uid, sizeof(out[i].duid));
+			out[i].remote_play_enabled = list[i].remoteplay_enabled;
+		}
+		*devices_out = out;
+		*count_out = count;
+	}
+	chiaki_holepunch_free_device_list(&list);
+	return 0;
+}
+
+void cw_psn_free_devices(CWPSNDevice *devices)
+{
+	free(devices);
+}
+
+void cw_psn_generate_client_duid(char out[CW_PSN_CLIENT_DUID_SIZE])
+{
+	size_t size = CW_PSN_CLIENT_DUID_SIZE;
+	memset(out, 0, CW_PSN_CLIENT_DUID_SIZE);
+	chiaki_holepunch_generate_client_device_uid(out, &size);
+	out[CW_PSN_CLIENT_DUID_SIZE - 1] = '\0';
 }
