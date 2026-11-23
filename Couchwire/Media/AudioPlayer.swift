@@ -51,7 +51,7 @@ final class AudioPlayer: @unchecked Sendable {
 
 	/// How long the mic keeps running after a mute before the input is released (and the
 	/// orange indicator goes out). Quick mute/unmute within this window is seamless.
-	static let micReleaseDelay: TimeInterval = 30
+	static let micReleaseDelay: TimeInterval = 5 * 60
 	private var micRelease: DispatchWorkItem?
 
 	/// Unmutes (starting the mic if needed) or mutes. Muting drops your voice at once and
