@@ -100,6 +100,14 @@ final class StreamSession {
 			sink.input?.triggerEffects(typeLeft: typeLeft, left: Array(UnsafeBufferPointer(start: left, count: 10)),
 									   typeRight: typeRight, right: Array(UnsafeBufferPointer(start: right, count: 10)))
 		}
+		callbacks.led_color = { r, g, b, user in
+			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			sink.input?.lightbar(r: r, g: g, b: b)
+		}
+		callbacks.player_index = { index, user in
+			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
+			sink.input?.playerIndex(index)
+		}
 		callbacks.haptics = { buf, frames, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
 			sink.input?.haptics(UnsafeBufferPointer(start: buf, count: frames * 2), frames: frames)

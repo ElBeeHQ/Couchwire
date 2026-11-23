@@ -16,6 +16,10 @@ final class ControllerFeedback: @unchecked Sendable {
 	private var rawTriggers: (left: [UInt8], right: [UInt8]) = (rawOff, rawOff)
 	private var hid: DualSenseHID?
 	private var keepaliveTicks = 0
+	private var reconnectAfter: CFTimeInterval = 0
+	/// PS5 defaults until the console says otherwise: player 1 blue.
+	private var lightbar: (UInt8, UInt8, UInt8) = (0, 0, 64)
+	private var playerLEDs: UInt8 = 0x04
 	private var hapticFrames = 0
 	private var hapticPeak: Float = 0
 	private var rumble: (Float, Float) = (0, 0)
@@ -35,13 +39,38 @@ final class ControllerFeedback: @unchecked Sendable {
 		controller = c
 		motors = HapticMotors(controller: c)
 		if c.extendedGamepad is GCDualSenseGamepad {
-			usbHaptics = DualSenseUSBHaptics.makeIfConnected()
-			log.info("DualSense haptics via \(self.usbHaptics == nil ? "Core Haptics (Bluetooth)" : "USB audio (voice coils)", privacy: .public)")
-			hid = DualSenseHID.open()
-			log.info("Adaptive triggers via \(self.hid == nil ? "GameController (fallback)" : "direct HID reports", privacy: .public)")
-			applyTriggers()
+			connectDevices()
 		}
 		startDecayTimer()
+	}
+
+	/// (Re)opens the DualSense on whatever transport it's on now and picks the haptics path:
+	/// USB → voice coils via its audio device; Bluetooth → HID rumble emulation.
+	private func connectDevices() {
+		hid = DualSenseHID.open()
+		hid?.onFailure = { [weak self] in
+			guard let self else { return }
+			queue.async { self.devicesChanged() }
+		}
+		if hid?.isBluetooth == false {
+			if usbHaptics == nil { usbHaptics = DualSenseUSBHaptics.makeIfConnected() }
+		} else {
+			usbHaptics?.stop()
+			usbHaptics = nil
+		}
+		lastSentRumble = (0, 0)
+		applyLights()
+		log.info("DualSense feedback: triggers via \(self.hid == nil ? "GameController (fallback)" : (self.hid!.isBluetooth ? "HID over Bluetooth" : "HID over USB"), privacy: .public), haptics via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
+		applyTriggers()
+	}
+
+	/// The old HID handle is dead (unplugged, or moved between Bluetooth and USB). Drop it;
+	/// the timer reconnects once the controller has re-enumerated.
+	private func devicesChanged() {
+		hid = nil
+		usbHaptics?.stop()
+		usbHaptics = nil
+		reconnectAfter = CACurrentMediaTime() + 0.5
 	}
 
 	func detach() {
@@ -71,11 +100,20 @@ final class ControllerFeedback: @unchecked Sendable {
 
 	/// Called on libchiaki's receive thread with stereo 3 kHz PCM (10 ms per frame).
 	func pushHaptics(_ pcm: UnsafeBufferPointer<Int16>, frames: Int) {
-		if let usb = usbHaptics {
-			usb.push(pcm, frames: frames)
-			return
+		let samples = Array(pcm.prefix(frames * 2))
+		queue.async { [self] in
+			hapticFrames += 1
+			lastHapticFrame = CACurrentMediaTime()
+			if let usb = usbHaptics {
+				samples.withUnsafeBufferPointer { usb.push($0, frames: frames) }
+			} else {
+				pushEnvelope(samples, frames: frames)
+			}
 		}
-		// Bluetooth: no raw haptic channel, so drive Core Haptics from the signal envelope.
+	}
+
+	/// Bluetooth: no raw haptic channel, so drive rumble emulation from the signal envelope.
+	private func pushEnvelope(_ pcm: [Int16], frames: Int) {
 		var sumL: Float = 0, sumR: Float = 0
 		for i in 0..<frames {
 			let l = Float(pcm[2 * i]) / 32768, r = Float(pcm[2 * i + 1]) / 32768
@@ -86,19 +124,18 @@ final class ControllerFeedback: @unchecked Sendable {
 		// RMS → perceptual intensity. Haptic signals are fairly quiet; boost and soft-clip.
 		let left = min(1, (sumL / n).squareRoot() * 2.5)
 		let right = min(1, (sumR / n).squareRoot() * 2.5)
-		queue.async { [self] in
-			hapticFrames += 1
-			hapticPeak = max(hapticPeak, max(left, right))
-			envelope = (left, right)
-			lastHapticFrame = CACurrentMediaTime()
-			applyMotors()
-		}
+		hapticPeak = max(hapticPeak, max(left, right))
+		envelope = (left, right)
+		applyMotors()
 	}
 
 	private var lastSentRumble: (UInt8, UInt8) = (0, 0)
 
 	private func applyMotors() {
 		let left = max(rumble.0, envelope.0), right = max(rumble.1, envelope.1)
+		// While USB voice-coil haptics are playing, don't send rumble reports: they switch
+		// the controller from audio haptics to rumble emulation.
+		if usbHaptics != nil, CACurrentMediaTime() - lastHapticFrame < 1 { return }
 		guard let hid else {
 			motors?.set(left: left, right: right)
 			return
@@ -124,19 +161,48 @@ final class ControllerFeedback: @unchecked Sendable {
 			// (e.g. from the system's own controller driver) reset them.
 			keepaliveTicks += 1
 			if keepaliveTicks % 100 == 0 { // every 5 s
-				log.info("Haptics: \(self.hapticFrames) frames in 5 s, peak \(self.hapticPeak, format: .fixed(precision: 2)), via \(self.hid != nil ? "HID rumble" : (self.usbHaptics != nil ? "USB voice coils" : "Core Haptics"), privacy: .public)")
+				log.info("Haptics: \(self.hapticFrames) frames in 5 s, peak \(self.hapticPeak, format: .fixed(precision: 2)), via \(self.usbHaptics != nil ? "USB voice coils" : (self.hid != nil ? "HID rumble" : "Core Haptics"), privacy: .public)")
 				hapticFrames = 0
 				hapticPeak = 0
+			}
+			if hid == nil, reconnectAfter > 0, CACurrentMediaTime() >= reconnectAfter,
+			   controller?.extendedGamepad is GCDualSenseGamepad {
+				reconnectAfter = CACurrentMediaTime() + 1 // retry every second until it's back
+				connectDevices()
+				if hid != nil { reconnectAfter = 0 }
 			}
 			if keepaliveTicks % 20 == 0, let hid, rawTriggers != (Self.rawOff, Self.rawOff) {
 				hid.setTriggers(left: rawTriggers.left, right: rawTriggers.right)
 			}
-			guard envelope != (0, 0), CACurrentMediaTime() - lastHapticFrame > 0.06 else { return }
+			guard usbHaptics == nil, envelope != (0, 0), CACurrentMediaTime() - lastHapticFrame > 0.06 else { return }
 			envelope = (0, 0)
 			applyMotors()
 		}
 		t.resume()
 		decayTimer = t
+	}
+
+	// MARK: Lightbar and player LEDs
+
+	func setLightbar(r: UInt8, g: UInt8, b: UInt8) {
+		lightbar = (r, g, b)
+		applyLights()
+	}
+
+	func setPlayerIndex(_ index: UInt8) {
+		// Same patterns as a PS5: centre dot for player 1, then outward pairs.
+		let masks: [UInt8] = [0x04, 0x0A, 0x15, 0x1B, 0x1F]
+		playerLEDs = index >= 1 ? masks[min(Int(index) - 1, masks.count - 1)] : 0x04
+		applyLights()
+	}
+
+	private func applyLights() {
+		if let hid {
+			hid.setLights(r: lightbar.0, g: lightbar.1, b: lightbar.2, playerLEDs: playerLEDs)
+		} else if let light = controller?.light {
+			let (r, g, b) = lightbar
+			DispatchQueue.main.async { light.color = GCColor(red: Float(r) / 255, green: Float(g) / 255, blue: Float(b) / 255) }
+		}
 	}
 
 	// MARK: Adaptive triggers
@@ -358,12 +424,17 @@ final class DualSenseUSBHaptics: @unchecked Sendable {
 			return false
 		}
 		let hw = engine.outputNode.outputFormat(forBus: 0)
-		guard hw.channelCount >= 4,
-			  let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: hw.sampleRate,
-										 channels: hw.channelCount, interleaved: false) else {
+		guard hw.channelCount >= 4 else {
 			log.error("DualSense audio device has \(hw.channelCount) channels; expected 4")
 			return false
 		}
+		// More than two channels needs an explicit layout; use discrete channels in order so
+		// channel 3/4 map straight to the left/right voice coils.
+		guard let layout = AVAudioChannelLayout(layoutTag: kAudioChannelLayoutTag_DiscreteInOrder | UInt32(hw.channelCount)) else {
+			log.error("Couldn't build a \(hw.channelCount)-channel layout")
+			return false
+		}
+		let format = AVAudioFormat(standardFormatWithSampleRate: hw.sampleRate, channelLayout: layout)
 		let ring = ring
 		let source = AVAudioSourceNode(format: format) { _, _, frameCount, abl -> OSStatus in
 			let buffers = UnsafeMutableAudioBufferListPointer(abl)

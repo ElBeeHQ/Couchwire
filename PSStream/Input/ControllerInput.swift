@@ -69,6 +69,16 @@ final class ControllerInput: @unchecked Sendable {
 		queue.async { self.feedback.setTriggerEffects(rawLeft: rawLeft, rawRight: rawRight, left: l, right: r) }
 	}
 
+	func lightbar(r: UInt8, g: UInt8, b: UInt8) {
+		log.info("Lightbar \(r) \(g) \(b)")
+		queue.async { self.feedback.setLightbar(r: r, g: g, b: b) }
+	}
+
+	func playerIndex(_ index: UInt8) {
+		log.info("Player index \(index)")
+		queue.async { self.feedback.setPlayerIndex(index) }
+	}
+
 	/// Haptic PCM from the console, called on libchiaki's receive thread.
 	func haptics(_ pcm: UnsafeBufferPointer<Int16>, frames: Int) {
 		feedback.pushHaptics(pcm, frames: frames)

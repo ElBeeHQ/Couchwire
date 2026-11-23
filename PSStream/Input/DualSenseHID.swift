@@ -15,6 +15,10 @@ final class DualSenseHID: @unchecked Sendable {
 	private let manager: IOHIDManager
 	private let device: IOHIDDevice
 	let isBluetooth: Bool
+	/// Called once, on the HID queue, the first time a report fails to send — typically
+	/// because the controller disconnected or switched between Bluetooth and USB.
+	var onFailure: (() -> Void)?
+	private var failed = false
 	private let queue = DispatchQueue(label: "PSStream.hid", qos: .userInteractive)
 	private let log = Logger(subsystem: "PSStream", category: "Feedback")
 
@@ -77,6 +81,17 @@ final class DualSenseHID: @unchecked Sendable {
 		send(effects: effects)
 	}
 
+	/// Lightbar colour and player-indicator LEDs.
+	func setLights(r: UInt8, g: UInt8, b: UInt8, playerLEDs: UInt8) {
+		var effects = [UInt8](repeating: 0, count: 47)
+		effects[1] = 0x04 | 0x10   // valid flag 1: lightbar colour + player LEDs
+		effects[43] = playerLEDs   // 5-bit mask, left to right
+		effects[44] = r
+		effects[45] = g
+		effects[46] = b
+		send(effects: effects)
+	}
+
 	private func send(effects: [UInt8]) {
 		queue.async { [self] in
 			var report: [UInt8]
@@ -96,8 +111,10 @@ final class DualSenseHID: @unchecked Sendable {
 			let result = report.withUnsafeBufferPointer {
 				IOHIDDeviceSetReport(device, kIOHIDReportTypeOutput, CFIndex(report[0]), $0.baseAddress!, $0.count)
 			}
-			if result != kIOReturnSuccess {
-				log.error("DualSense output report failed: \(result)")
+			if result != kIOReturnSuccess, !failed {
+				failed = true
+				log.error("DualSense output report failed (\(result)); reconnecting")
+				onFailure?()
 			}
 		}
 	}

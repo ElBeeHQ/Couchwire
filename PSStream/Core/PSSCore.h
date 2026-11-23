@@ -123,6 +123,10 @@ typedef struct {
 	void (*trigger_effects)(uint8_t type_left, const uint8_t *left, uint8_t type_right, const uint8_t *right, void *user);
 	/// DualSense haptics: interleaved stereo (left, right) signed 16-bit PCM at 3000 Hz.
 	void (*haptics)(const int16_t *buf, size_t frames, void *user);
+	/// Lightbar colour requested by the console/game.
+	void (*led_color)(uint8_t r, uint8_t g, uint8_t b, void *user);
+	/// Player number (1-based as sent by the console), shown on the player LEDs.
+	void (*player_index)(uint8_t index, void *user);
 } PSSSessionCallbacks;
 
 /// Mirrors ChiakiControllerState. Axes are -32768...32767 (Y down positive, as on DualSense).

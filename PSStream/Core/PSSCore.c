@@ -307,6 +307,14 @@ static void session_event_cb(ChiakiEvent *event, void *user)
 				s->cb.trigger_effects(event->trigger_effects.type_left, event->trigger_effects.left,
 						event->trigger_effects.type_right, event->trigger_effects.right, s->cb.user);
 			break;
+		case CHIAKI_EVENT_LED_COLOR:
+			if(s->cb.led_color)
+				s->cb.led_color(event->led_state[0], event->led_state[1], event->led_state[2], s->cb.user);
+			break;
+		case CHIAKI_EVENT_PLAYER_INDEX:
+			if(s->cb.player_index)
+				s->cb.player_index(event->player_index, s->cb.user);
+			break;
 		case CHIAKI_EVENT_QUIT:
 			if(s->cb.quit)
 				s->cb.quit((int)event->quit.reason, chiaki_quit_reason_is_error(event->quit.reason),
