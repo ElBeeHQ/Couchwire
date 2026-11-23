@@ -133,10 +133,12 @@ struct OnboardingView: View {
 				.fixedSize(horizontal: false, vertical: true)
 			Text("You’ll need").font(.headline)
 			VStack(alignment: .leading, spacing: 14) {
-				need("playstation.logo", "Your PS5, switched on", "You’ll change two settings on it and read a code from the TV.")
+				need("tv", "Your PS5, switched on", "You’ll change two settings on it and read a code from the TV.")
 				need("person.crop.circle", "Your PlayStation Network sign-in", "The same account you use on the PS5.")
 				need("wifi", "The same network", "Your Mac and PS5 on the same home network. A wired connection on both gives the smoothest picture.")
-				need("gamecontroller", "A controller", "Connect a DualSense to your Mac with a USB cable or Bluetooth. You can do this later.")
+				PSButtonRequest(boxed: false) {
+					need("gamecontroller", "A controller", "Connect a DualSense to your Mac with a USB cable or Bluetooth. You can do this later.")
+				}
 			}
 		}
 	}
@@ -197,6 +199,8 @@ struct OnboardingView: View {
 				} icon: {
 					Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title2)
 				}
+				PSButtonRequest()
+					.padding(.top, 6)
 				Text("Click Continue to pair your PS5.").foregroundStyle(.secondary)
 				Button("Use a Different Account…") { signingIn = true }
 					.buttonStyle(.link)

@@ -259,7 +259,7 @@ private struct PSButtonTip: View {
 		Group {
 			if hasHomeButton {
 				HStack(spacing: 14) {
-					Image(systemName: "playstation.logo")
+					Image(systemName: "gamecontroller")
 						.font(.title2)
 					VStack(alignment: .leading, spacing: 2) {
 						Text("Does the PS button open Games on your Mac?").font(.headline)
