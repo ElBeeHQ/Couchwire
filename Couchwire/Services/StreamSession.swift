@@ -287,7 +287,7 @@ final class StreamSession {
 		case CW_ERR_HOST_UNREACH where internet?.forcePortGuessing == true:
 			"This network doesn’t allow a direct connection to \(name). Some mobile networks block it, for Sony’s own Remote Play app too. Try Wi-Fi or a different hotspot."
 		case CW_ERR_HOST_UNREACH:
-			"Couldn’t open a connection to \(name) through these networks. Turn on “Try harder on difficult networks” in Settings › Internet Play, or try another network."
+			"Couldn’t open a connection to \(name) through these networks. Turn on “Try harder on difficult networks” in Settings › Account, or try another network."
 		default:
 			"Couldn’t connect to \(name) over the internet (\(String(cString: cw_error_string(err))))."
 		}

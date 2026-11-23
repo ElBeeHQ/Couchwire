@@ -22,22 +22,51 @@ struct SettingsView: View {
 	}
 
 	var body: some View {
+		TabView {
+			videoTab
+				.tabItem { Label("Video", systemImage: "play.rectangle") }
+			accountTab
+				.tabItem { Label("Account", systemImage: "person.crop.circle") }
+			Form { UpdateSettingsSection() }
+				.formStyle(.grouped)
+				.tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }
+		}
+		.frame(width: 460)
+		.fixedSize()
+		.sheet(isPresented: $signingIn) {
+			PSNSignInSheet { model.signedIn($0) }
+		}
+		.task { await model.checkPSNSignIn() }
+	}
+
+	private var videoTab: some View {
 		@Bindable var model = model
-		Form {
+		return Form {
 			Section {
 				StreamSettingsFields(settings: $model.settings)
 				Toggle("Adjust quality to the connection", isOn: $model.autoQuality)
 				Picker("Smoothing", selection: $model.smoothing) {
 					ForEach(SmoothingMode.allCases) { Text($0.name).tag($0) }
 				}
-			} header: {
-				Text("Video")
 			} footer: {
 				Text(videoFooter)
 					.font(.caption)
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
 			}
+			Section {
+				Text("For the lowest latency, connect your Mac and PS5 with Ethernet, and play in full screen so macOS Game Mode turns on.")
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+		}
+		.formStyle(.grouped)
+	}
+
+	private var accountTab: some View {
+		@Bindable var model = model
+		return Form {
 			Section {
 				LabeledContent("PSN Account ID") {
 					HStack {
@@ -55,6 +84,7 @@ struct SettingsView: View {
 				Text("Needed once, to pair with a console. Signing in saves only your Account ID, unless Internet Play is on.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
 			}
 			Section {
 				Toggle("Play over the internet", isOn: Binding(
@@ -86,20 +116,8 @@ struct SettingsView: View {
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)
 			}
-			UpdateSettingsSection()
-			Section {
-				Text("For the lowest latency, connect your Mac and PS5 with Ethernet, and play in full screen so macOS Game Mode turns on.")
-					.font(.callout)
-					.foregroundStyle(.secondary)
-			}
 		}
 		.formStyle(.grouped)
-		.frame(width: 460)
-		.fixedSize()
-		.sheet(isPresented: $signingIn) {
-			PSNSignInSheet { model.signedIn($0) }
-		}
-		.task { await model.checkPSNSignIn() }
 	}
 }
 

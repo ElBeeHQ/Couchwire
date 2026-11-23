@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Settings is split into Video, Account and Updates tabs, so it fits on a laptop screen. Internet Play is under Account.
+
 ### Fixed
 
 - On a network that won't allow a direct connection to your PS5 (some mobile networks), Couchwire now says so after two tries instead of retrying for two minutes.

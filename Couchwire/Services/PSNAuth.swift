@@ -16,7 +16,7 @@ enum PSNAuth {
 		case badRedirect, server(String), malformed, signInExpired
 		var errorDescription: String? {
 			switch self {
-			case .signInExpired: "Your PlayStation Network sign-in has expired. Sign in again in Settings › Internet Play."
+			case .signInExpired: "Your PlayStation Network sign-in has expired. Sign in again in Settings › Account."
 			case .badRedirect: "Sign-in didn’t return an authorization code. Please try again."
 			case .server(let msg): "PlayStation Network returned an error: \(msg)"
 			case .malformed: "PlayStation Network sent a response Couchwire couldn’t read."
