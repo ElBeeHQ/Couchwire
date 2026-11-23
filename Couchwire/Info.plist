@@ -34,6 +34,12 @@
 	<string>Couchwire finds and connects to PS5 consoles on your local network.</string>
 	<key>NSBonjourServices</key>
 	<array/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/ElBeeHQ/couchwire-releases/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>LO8mGPPsVvCItsFZh/4FGfSlcvdOEewBhoVsTSttb8Y=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

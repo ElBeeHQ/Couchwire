@@ -6,18 +6,26 @@
 #   SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=couchwire scripts/package.sh
 #                                      Developer ID signed, notarized and stapled
 #                                      (profile from `xcrun notarytool store-credentials`)
+#   PUBLISH=1 scripts/package.sh       also uploads the DMG and appcast as a GitHub release
+#                                      on ElBeeHQ/couchwire-releases (the app's update feed)
 #
-# Output: build/release/Couchwire-<version>.dmg
+# Every DMG is signed with Couchwire's Sparkle EdDSA key (login keychain, account
+# "couchwire") and gets an appcast.xml. Bump CFBundleVersion in Info.plist for each release:
+# Sparkle compares it to decide whether an update is newer.
+#
+# Output: build/release/Couchwire-<version>.dmg and build/release/appcast.xml
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build/release"
 DERIVED="$OUT/DerivedData"
 IDENTITY="${SIGN_IDENTITY:--}"
+RELEASES_REPO="ElBeeHQ/couchwire-releases"
+SPARKLE_ACCOUNT="couchwire"
 
 cd "$ROOT"
 xcodegen generate > /dev/null
-rm -rf "$OUT"
+rm -rf "$OUT"/*.dmg "$OUT/appcast.xml" "$OUT/dmg"  # keep DerivedData (and the Sparkle download)
 mkdir -p "$OUT"
 
 echo "== Building Release"
@@ -53,4 +61,23 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
 	xcrun stapler staple "$DMG"
 fi
 
+echo "== Signing the update and writing the appcast"
+SPARKLE_BIN="$DERIVED/SourcePackages/artifacts/sparkle/Sparkle/bin"
+FEED="$OUT/feed"
+mkdir -p "$FEED"
+mv "$DMG" "$FEED/"
+"$SPARKLE_BIN/generate_appcast" --account "$SPARKLE_ACCOUNT" \
+	--download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/v$VERSION/" \
+	-o "$OUT/appcast.xml" "$FEED"
+mv "$FEED/$(basename "$DMG")" "$DMG"
+rm -rf "$FEED"
+grep -q "sparkle:edSignature" "$OUT/appcast.xml" || { echo "appcast has no EdDSA signature" >&2; exit 1; }
+
+if [ "${PUBLISH:-}" = "1" ]; then
+	echo "== Publishing v$VERSION to $RELEASES_REPO"
+	gh release create "v$VERSION" "$DMG" "$OUT/appcast.xml" --repo "$RELEASES_REPO" \
+		--title "Couchwire $VERSION" --notes "Couchwire $VERSION"
+fi
+
 echo "Done: $DMG"
+echo "      $OUT/appcast.xml"

@@ -9,6 +9,7 @@ struct CouchwireApp: App {
 		// Must run before AppModel loads consoles and settings from UserDefaults.
 		LegacyDefaults.migrateIfNeeded()
 		_model = State(initialValue: AppModel())
+		_ = Updater.shared  // start Sparkle's scheduled checks at launch
 	}
 
 	var body: some Scene {
@@ -47,6 +48,9 @@ struct CouchwireApp: App {
 		}
 
 		.commands {
+			CommandGroup(after: .appInfo) {
+				CheckForUpdatesButton()
+			}
 			CommandGroup(replacing: .help) {
 				Button("Set Up Couchwire…") { model.showingOnboarding = true }
 			}

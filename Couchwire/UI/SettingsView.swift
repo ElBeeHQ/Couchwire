@@ -28,6 +28,7 @@ struct SettingsView: View {
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
+			UpdateSettingsSection()
 			Section {
 				Text("For the lowest latency, connect your Mac and PS5 with Ethernet, and play in full screen so macOS Game Mode turns on.")
 					.font(.callout)
