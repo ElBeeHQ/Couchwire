@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.3: A fix for a black screen
+
+*23 November 2026*
+
+Fixes a black screen when the PS5 turns down the first request to start a stream.
+
+### Fixed
+
+- The stream no longer stays black when the PS5 turns down the first request and Couchwire quietly tries again. The picture was arriving, but the window kept showing the first try's empty video.
+
 ## v0.2.2: Smoother on mobile data, sharper at home
 
 *23 November 2026*
