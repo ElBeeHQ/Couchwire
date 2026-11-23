@@ -513,7 +513,9 @@ int cw_session_mic_set_muted(CWSession *s, bool muted)
 			return (int)err;
 		s->mic_connected = true;
 	}
-	return (int)chiaki_session_toggle_microphone(&s->session, muted);
+	// libchiaki's flag is inverted: it takes the *current* state, so true sends unmute
+	// (see ctrl_message_toggle_microphone).
+	return (int)chiaki_session_toggle_microphone(&s->session, !muted);
 }
 
 void cw_session_mic_frame(CWSession *s, int16_t *pcm)
