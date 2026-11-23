@@ -176,6 +176,17 @@ struct StreamWindowView: View {
 					Text(reconnecting
 						 ? (model.reconnectReason == .lowerQuality ? "Restarting \(session.console.nickname) at lower quality…" : "Network changed. Reconnecting to \(session.console.nickname)…")
 						 : "Connecting to \(session.console.nickname)…")
+					if session.waitingForRelease {
+						Text("Waiting for your PS5 to let go of the last stream…")
+							.font(.callout)
+							.foregroundStyle(.secondary)
+							.multilineTextAlignment(.center)
+						Button("Cancel") {
+							model.endSession()
+							dismissWindow(id: "stream")
+						}
+						.keyboardShortcut(.cancelAction)
+					}
 				}
 			}
 		case .needsPIN(let incorrect):

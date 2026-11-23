@@ -56,7 +56,7 @@ final class StreamSession {
 		didSet { pacer?.mode = smoothing.resolved(for: link) }
 	}
 	@ObservationIgnored private let pacer: FramePacer?
-	/// The stream has kept stuttering for a while; the window offers lower quality.
+	/// The stream is stuttering now (most of the last 10 s); the window offers lower quality. Clears once it recovers.
 	private(set) var struggling = false
 	/// Why, once `struggling`.
 	private(set) var struggleReason: StruggleDetector.Reason = .late
@@ -351,6 +351,10 @@ final class StreamSession {
 		keepCoreLog = false
 		Self.timing.notice("Streaming after \(self.elapsed, privacy: .public) s (\(self.internet != nil ? "internet" : self.isHome ? "home" : "direct", privacy: .public))")
 		phase = .streaming
+		hasStreamed = true
+		// Just after a network change (a reconnect, usually) the Wi-Fi is still settling: give it longer
+		// before judging the stream, so the banner and automatic quality aren't misled.
+		detector = StruggleDetector(afterNetworkChange: PathWatcher.shared.secondsSinceChange < 60)
 		startStatsTimer()
 		// The live ping goes to the console's home address, which only answers on the home network.
 		if isHome {
@@ -371,9 +375,17 @@ final class StreamSession {
 		9, // CTRL_CONNECTION_REFUSED
 	]
 
-	/// Asked when the session fails before any video because the console wasn't ready. Return true to say a
-	/// new attempt is coming: this session then stays "connecting" instead of showing the error.
-	@ObservationIgnored var retryWhenNotReady: ((StreamSession) -> Bool)?
+	/// SESSION_REQUEST_RP_IN_USE: the console is still holding a stream, often the one that just ended.
+	private static let inUseReason: Int32 = 4
+
+	/// Asked when the session fails before any video because the console wasn't ready, or (`inUse`) was still
+	/// busy with a stream. Return true to say a new attempt is coming: this session then stays "connecting"
+	/// instead of showing the error.
+	@ObservationIgnored var retryWhenNotReady: ((StreamSession, _ inUse: Bool) -> Bool)?
+	/// This attempt follows an "already in use" refusal: the console is letting go of the last stream.
+	var waitingForRelease = false
+	/// Video arrived at some point, so the console now holds a stream for this Mac.
+	private(set) var hasStreamed = false
 
 	private func didQuit(reason: Int32, error: String?) {
 		keepCoreLog = false
@@ -383,7 +395,8 @@ final class StreamSession {
 			reportLost()
 			return
 		}
-		if phase == .connecting, Self.notReadyReasons.contains(reason), retryWhenNotReady?(self) == true {
+		if phase == .connecting, Self.notReadyReasons.contains(reason) || reason == Self.inUseReason,
+		   retryWhenNotReady?(self, reason == Self.inUseReason) == true {
 			teardown()
 			return
 		}
@@ -439,9 +452,11 @@ final class StreamSession {
 		stats = snapshot
 		detector.add(snapshot)
 		logStats(snapshot)
-		if detector.struggling, !struggling {
+		// The banner follows how the stream is doing now; learning uses whether it ever struggled.
+		if detector.strugglingNow != struggling {
 			struggleReason = detector.reason
-			struggling = true
+			struggling = detector.strugglingNow
+			Self.timing.notice("\(self.struggling ? "Struggling" : "No longer struggling", privacy: .public) after \(self.elapsed, privacy: .public) s")
 		}
 	}
 

@@ -65,6 +65,12 @@ final class AppModel {
 	/// Why reconnecting gave up, shown in the stream window.
 	private(set) var reconnectError: String?
 	@ObservationIgnored private var reconnectTask: Task<Void, Never>?
+	/// When this Mac's last stream from each console ended, by host ID. For a while afterwards the console
+	/// still holds that stream and says it's in use, so a new connect quietly asks again until it lets go.
+	@ObservationIgnored private var streamEnded: [String: ContinuousClock.Instant] = [:]
+	/// How long after our own stream ended an "in use" refusal is taken to mean that stream. A PS5 can take
+	/// about 40 s to give up on a stream whose network went away; one we ended properly, about 6 s.
+	private static let releaseWindow: Duration = .seconds(60)
 	/// Shown to the user, and written to the Timing log so a failed connect can be looked into later.
 	var lastError: String? {
 		didSet {
@@ -334,13 +340,30 @@ final class AppModel {
 			s.unreachableHint = "Couldn’t reach \(console.nickname) at \(address). Check that your router forwards the PS5’s ports (9295 TCP and UDP, and 9296, 9297 and 9302 UDP) to it, and that the address is your home’s current one."
 		}
 		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
-		s.retryWhenNotReady = { [weak self] failed in
-			guard let self, retries > 0, self.session === failed else { return false }
+		s.retryWhenNotReady = { [weak self] failed, inUse in
+			guard let self, self.session === failed else { return false }
+			// At home, only while the console is still on this network. If the Mac has just moved (to a hotspot,
+			// say), trying the home address again only times out; the reconnect loop goes over the internet instead.
+			if address == nil {
+				let now = self.registered.first { $0.hostID == console.hostID } ?? console
+				guard LocalNetwork.contains(now.lastAddress), self.discoveredState(of: console) != nil else { return false }
+			}
+			// Still holding our last stream: ask again every second until it lets go (the refusal takes a
+			// moment, so this doesn't hurry it). In use by something else: say so now.
+			if inUse {
+				guard let ended = self.streamEnded[console.hostID], ContinuousClock.now - ended < Self.releaseWindow else { return false }
+				if !failed.waitingForRelease {
+					StreamSession.timing.notice("Console still holding the last stream; asking every second")
+				}
+			} else if retries <= 0 {
+				return false
+			}
 			Task { @MainActor in
-				try? await Task.sleep(for: .seconds(3))
+				try? await Task.sleep(for: .seconds(inUse ? 1 : 3))
 				// Ended or replaced in the meantime (the user closed the window).
 				guard self.session === failed else { return }
-				let next = self.makeSession(console, keys: keys, ceiling: ceiling, retries: retries - 1, address: address)
+				let next = self.makeSession(console, keys: keys, ceiling: ceiling, retries: inUse ? retries : retries - 1, address: address)
+				next.waitingForRelease = inUse
 				self.session = next
 				next.start()
 			}
@@ -423,8 +446,15 @@ final class AppModel {
 		reconnectTask = nil
 		reconnecting = nil
 		reconnectError = nil
+		if let s = session { noteEnded(s) }
 		session?.stop()
 		session = nil
+	}
+
+	/// Remembers when a stream that got as far as video ended, so the next connect knows why the
+	/// console may still say it's in use.
+	private func noteEnded(_ s: StreamSession) {
+		if s.hasStreamed { streamEnded[s.console.hostID] = .now }
 	}
 
 	/// The stream stopped arriving, usually because the Mac moved to another network. End it, wait
@@ -439,6 +469,7 @@ final class AppModel {
 		StreamSession.timing.notice("Stream lost; reconnecting")
 		// A network switch says nothing about the connection's quality.
 		lost.skipLearning()
+		noteEnded(lost)
 		lost.stop()
 		session = nil
 		reconnectTask = Task { [weak self] in
@@ -466,7 +497,11 @@ final class AppModel {
 			// answering), so a home connection is used when there is one.
 			let current = registered.first { $0.hostID == console.hostID } ?? console
 			let away = internetPlay && psnSignedIn && !LocalNetwork.contains(current.lastAddress)
-			try? await Task.sleep(for: .seconds(attempt == 0 ? (away ? 0.5 : 4) : (away ? 1 : 5)))
+			if attempt == 0, !away {
+				await waitForHomeConsole(console)
+			} else {
+				try? await Task.sleep(for: .seconds(attempt == 0 ? 0.5 : (away ? 1 : 5)))
+			}
 			attempt += 1
 			reconnectAttempt = attempt
 			if Task.isCancelled { return }
@@ -521,6 +556,19 @@ final class AppModel {
 			: "Couldn’t reconnect to \(console.nickname) on this network.")
 			+ (internetPlay ? "" : " To play away from home, turn on Internet Play in Settings.")
 		lastError = nil
+	}
+
+	/// Before the first reconnect at home: up to 4 s for discovery to find the console on this network, but
+	/// no longer than needed. A console still listed from the network the Mac has just left is dropped by
+	/// discovery 3 s after it stops answering, so nothing counts until 4 s after the network changed.
+	private func waitForHomeConsole(_ console: RegisteredConsole) async {
+		for _ in 0..<16 {
+			let current = registered.first { $0.hostID == console.hostID } ?? console
+			if PathWatcher.shared.secondsSinceChange >= 4, discoveredState(of: console) != nil,
+			   LocalNetwork.contains(current.lastAddress) { return }
+			try? await Task.sleep(for: .milliseconds(250))
+			if Task.isCancelled { return }
+		}
 	}
 }
 

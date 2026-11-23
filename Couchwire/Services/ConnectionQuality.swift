@@ -198,8 +198,14 @@ final class PathWatcher: @unchecked Sendable {
 struct StruggleDetector {
 	/// Seconds of stats kept.
 	private static let window = 20 // half-second samples: 10 s
-	/// Ignore the first few seconds: the stream settles and the first keyframe is big.
-	private static let grace = 12 // samples: 6 s
+	/// Ignore the first few seconds: the stream settles and the first keyframe is big. Longer just after
+	/// the Mac changed network, as Wi-Fi takes a while to settle and frames are lost meanwhile.
+	private let grace: Int
+
+	/// `afterNetworkChange`: the stream started soon after the Mac joined this network.
+	init(afterNetworkChange: Bool = false) {
+		grace = afterNetworkChange ? 60 : 12 // half-second samples: 30 s or 6 s
+	}
 
 	private var samples: [Bool] = []
 	private var count = 0
@@ -209,8 +215,11 @@ struct StruggleDetector {
 	private var steadyCount = 0
 	private var anyLost = false
 
-	/// True once the last 10 s were mostly bad.
+	/// True once the last 10 s were mostly bad, and stays true: the session counts as struggling.
 	private(set) var struggling = false
+	/// Whether it's struggling now: set when the last 10 s were mostly bad, cleared once they're
+	/// mostly fine again. For the banner.
+	private(set) var strugglingNow = false
 	/// What went wrong most often, once struggling.
 	private(set) var reason: Reason = .late
 	private var lossCount = 0, lateCount = 0
@@ -223,7 +232,7 @@ struct StruggleDetector {
 		count += 1
 		let lost = s.framesLost - lastFramesLost
 		lastFramesLost = s.framesLost
-		guard count > Self.grace else { return }
+		guard count > grace else { return }
 		if lost > 0 { anyLost = true }
 		if let ping = s.pingMs, ping < 10, s.pingJitterMs < 3 { steadyCount += 1 }
 		let lossy = s.packetLoss > 0.02 || lost > 1
@@ -234,16 +243,21 @@ struct StruggleDetector {
 		if late { lateCount += 1 }
 		samples.append(bad)
 		if samples.count > Self.window { samples.removeFirst() }
-		if samples.count == Self.window, samples.filter({ $0 }).count >= Self.window * 6 / 10 {
+		guard samples.count == Self.window else { return }
+		let badRecent = samples.filter { $0 }.count
+		if badRecent >= Self.window * 6 / 10 {
 			struggling = true
+			strugglingNow = true
 			reason = lossCount >= lateCount ? .loss : .late
+		} else if badRecent <= Self.window / 5 {
+			strugglingNow = false
 		}
 	}
 
 	/// How the session went, once it has run long enough to tell.
 	var outcome: ConnectionQuality.Outcome? {
 		if struggling { return .struggled }
-		let measured = count - Self.grace
+		let measured = count - grace
 		// Smooth: at least 90 s with under 3% bad samples.
 		guard measured >= 180, Double(badTotal) / Double(measured) < 0.03 else { return nil }
 		// Excellent: nothing bad or lost, and the round trip short and steady 95% of the time.
