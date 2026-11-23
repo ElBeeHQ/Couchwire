@@ -4,6 +4,7 @@
 #include <chiaki/discoveryservice.h>
 #include <chiaki/log.h>
 #include <chiaki/opusdecoder.h>
+#include <chiaki/opusencoder.h>
 #include <chiaki/regist.h>
 #include <chiaki/session.h>
 
@@ -280,6 +281,9 @@ struct CWSession {
 	ChiakiLog log;
 	LogForward log_fwd;
 	ChiakiOpusDecoder opus;
+	/// Microphone: 48 kHz stereo 16-bit PCM in, 480-frame Opus packets out to the console.
+	ChiakiOpusEncoder mic;
+	bool mic_connected;
 	CWSessionCallbacks cb;
 	char *host;
 	bool started;
@@ -388,7 +392,12 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 	info.video_profile.height = config->height;
 	info.video_profile.max_fps = config->max_fps;
 	info.video_profile.bitrate = config->bitrate_kbps;
-	info.video_profile.codec = config->ps5 && config->codec == CW_CODEC_H265 ? CHIAKI_CODEC_H265 : CHIAKI_CODEC_H264;
+	switch(config->ps5 ? config->codec : CW_CODEC_H264)
+	{
+		case CW_CODEC_H265_HDR: info.video_profile.codec = CHIAKI_CODEC_H265_HDR; break;
+		case CW_CODEC_H265: info.video_profile.codec = CHIAKI_CODEC_H265; break;
+		default: info.video_profile.codec = CHIAKI_CODEC_H264; break;
+	}
 	info.video_profile_auto_downgrade = true;
 	info.enable_keyboard = false;
 	info.enable_dualsense = config->enable_dualsense;
@@ -415,6 +424,11 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 	ChiakiAudioSink sink;
 	chiaki_opus_decoder_get_sink(&s->opus, &sink);
 	chiaki_session_set_audio_sink(&s->session, &sink);
+
+	chiaki_opus_encoder_init(&s->mic, &s->log);
+	ChiakiAudioHeader mic_header;
+	chiaki_audio_header_set(&mic_header, 2, 16, CW_MIC_SAMPLE_RATE, CW_MIC_FRAME_SAMPLES);
+	chiaki_opus_encoder_header(&mic_header, &s->mic, &s->session);
 
 	ChiakiAudioSink haptics_sink = {0};
 	haptics_sink.user = s;
@@ -453,6 +467,7 @@ void cw_session_free(CWSession *s)
 	}
 	chiaki_session_fini(&s->session);
 	chiaki_opus_decoder_fini(&s->opus);
+	chiaki_opus_encoder_fini(&s->mic);
 	free(s->host);
 	free(s);
 }
@@ -485,6 +500,26 @@ int cw_session_set_controller(CWSession *s, const CWControllerState *in)
 	st.orient_z = in->orient_z;
 	st.orient_w = in->orient_w;
 	return (int)chiaki_session_set_controller_state(&s->session, &st);
+}
+
+int cw_session_mic_set_muted(CWSession *s, bool muted)
+{
+	if(!s->mic_connected)
+	{
+		if(muted)
+			return 0;
+		ChiakiErrorCode err = chiaki_session_connect_microphone(&s->session);
+		if(err != CHIAKI_ERR_SUCCESS)
+			return (int)err;
+		s->mic_connected = true;
+	}
+	return (int)chiaki_session_toggle_microphone(&s->session, muted);
+}
+
+void cw_session_mic_frame(CWSession *s, int16_t *pcm)
+{
+	if(s->mic_connected)
+		chiaki_opus_encoder_frame(pcm, &s->mic);
 }
 
 int cw_session_set_login_pin(CWSession *s, const char *pin)

@@ -19,6 +19,10 @@ final class StreamSession {
 	private(set) var phase: Phase = .connecting
 	/// Refreshed twice a second while streaming, for the performance overlay.
 	private(set) var stats = StreamStats.Snapshot()
+	/// Whether your voice is going to the console.
+	private(set) var micOn = false
+	/// Set when the mic couldn't start (no permission, no input device).
+	private(set) var micProblem: String?
 	let console: RegisteredConsole
 	let displayLayer = AVSampleBufferDisplayLayer()
 	/// Fed by the stream view's display link so we can measure time-to-refresh.
@@ -36,11 +40,15 @@ final class StreamSession {
 		self.console = console
 		displayLayer.videoGravity = .resizeAspect
 		displayLayer.backgroundColor = CGColor(gray: 0, alpha: 1)
+		if settings.codec == .hevcHDR {
+			// Let PQ/HLG frames use the display's extra brightness headroom (EDR).
+			displayLayer.wantsExtendedDynamicRangeContent = true
+		}
 		// No control timebase: samples are flagged DisplayImmediately and shown on decode.
 		let collector = StreamStats(codec: settings.codec.rawValue)
 		statsCollector = collector
 		media = MediaSink(
-			decoder: VideoDecoder(codec: settings.codec == .hevc ? .hevc : .h264,
+			decoder: VideoDecoder(codec: settings.codec.isHEVC ? .hevc : .h264, hdr: settings.codec == .hevcHDR,
 								  renderer: displayLayer.sampleBufferRenderer, stats: collector),
 			stats: collector)
 		media.owner = self
@@ -60,7 +68,11 @@ final class StreamSession {
 		cfg.height = size.height
 		cfg.max_fps = UInt32(settings.fps)
 		cfg.bitrate_kbps = UInt32(settings.bitrate)
-		cfg.codec = settings.codec == .hevc ? CW_CODEC_H265 : CW_CODEC_H264
+		cfg.codec = switch settings.codec {
+		case .h264: CW_CODEC_H264
+		case .hevc: CW_CODEC_H265
+		case .hevcHDR: CW_CODEC_H265_HDR
+		}
 		cfg.enable_dualsense = true
 
 		let box = Unmanaged.passRetained(media)
@@ -163,6 +175,35 @@ final class StreamSession {
 		if case .ended = phase {} else { phase = .ended(error: nil) }
 	}
 
+	func toggleMicrophone() {
+		Task { await setMicrophone(!micOn) }
+	}
+
+	func setMicrophone(_ on: Bool) async {
+		guard let h = handle, phase == .streaming else { return }
+		micProblem = nil
+		if on {
+			guard await MicrophoneCapture.requestAccess() else {
+				micProblem = "Allow Couchwire in System Settings › Privacy & Security › Microphone."
+				return
+			}
+			guard handle == h else { return }
+			media.audio.microphone.send = { cw_session_mic_frame(h, $0) }
+			guard media.audio.setMicrophone(true) else {
+				media.audio.microphone.send = nil
+				micProblem = "Couldn’t use the microphone."
+				return
+			}
+			_ = cw_session_mic_set_muted(h, false)
+			micOn = true
+		} else {
+			_ = cw_session_mic_set_muted(h, true)
+			media.audio.setMicrophone(false)
+			media.audio.microphone.send = nil
+			micOn = false
+		}
+	}
+
 	func putConsoleToSleep() {
 		if let handle { _ = cw_session_go_to_bed(handle) }
 	}
@@ -177,6 +218,11 @@ final class StreamSession {
 	}
 
 	private func didQuit(error: String?) {
+		var error = error
+		if let e = error, e.contains("AvCap failed to initialize video") {
+			// The console's encoder refused the requested resolution or codec.
+			error = "The PS5 couldn’t start video with these settings. Try 1080p, or a different codec, in this console’s settings."
+		}
 		phase = .ended(error: error)
 		teardown()
 	}
@@ -209,6 +255,7 @@ final class StreamSession {
 		input?.stop()
 		input = nil
 		media.audio.stop()
+		micOn = false
 		if let activity { ProcessInfo.processInfo.endActivity(activity) }
 		activity = nil
 		guard let h = handle else { return }

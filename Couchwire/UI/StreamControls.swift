@@ -32,6 +32,11 @@ struct StreamControls: View {
 				   help: "Show or hide the performance panel (⌥⌘I)", highlighted: showStats) {
 				showStats.toggle()
 			}
+			action(session.micOn ? "mic.fill" : "mic.slash", "Microphone",
+				   help: session.micProblem ?? (session.micOn ? "Stop sending your voice to the PS5 (⌃⌘M)" : "Talk in game and party chat (⌃⌘M)"),
+				   highlighted: session.micOn) {
+				session.toggleMicrophone()
+			}
 			action(isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
 				   isFullScreen ? "Exit Full Screen" : "Full Screen",
 				   help: isFullScreen ? "Return to a window (Esc or fn F)" : "Fill the display (fn F)", action: toggleFullScreen)

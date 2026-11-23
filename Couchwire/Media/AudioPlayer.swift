@@ -9,6 +9,8 @@ final class AudioPlayer: @unchecked Sendable {
 	private var sourceNode: AVAudioSourceNode?
 	private var ring: PCMRingBuffer?
 	private var channels = 2
+	let microphone = MicrophoneCapture()
+	private(set) var micActive = false
 	private let log = Logger(subsystem: "Couchwire", category: "Audio")
 
 	var volume: Float {
@@ -46,8 +48,34 @@ final class AudioPlayer: @unchecked Sendable {
 		ring?.write(samples)
 	}
 
+	/// Turns capture (with echo cancellation) on or off. The engine restarts, so game audio
+	/// drops out for a moment. Returns whether the mic ended up on.
+	@discardableResult
+	func setMicrophone(_ on: Bool) -> Bool {
+		guard on != micActive else { return micActive }
+		let wasRunning = engine.isRunning
+		engine.stop()
+		if on {
+			micActive = microphone.install(on: engine)
+		} else {
+			microphone.uninstall(from: engine)
+			micActive = false
+		}
+		if wasRunning || micActive {
+			do { try engine.start() } catch {
+				log.error("Audio engine failed to restart: \(error.localizedDescription)")
+			}
+		}
+		return micActive
+	}
+
 	func stop() {
 		engine.stop()
+		microphone.send = nil
+		if micActive {
+			microphone.uninstall(from: engine)
+			micActive = false
+		}
 		if let sourceNode {
 			engine.detach(sourceNode)
 		}

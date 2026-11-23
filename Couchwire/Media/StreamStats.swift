@@ -27,6 +27,7 @@ final class StreamStats: @unchecked Sendable {
 		var decodeErrors = 0
 		var resolution = ""
 		var codec = ""
+		var dynamicRange = ""
 		// Input: controller event to hand-off to libchiaki's send thread.
 		var inputAvgMs: Double = 0
 		var inputMaxMs: Double = 0
@@ -65,6 +66,7 @@ final class StreamStats: @unchecked Sendable {
 	private var vsyncTimestamp: CFTimeInterval = 0
 	private var vsyncDuration: CFTimeInterval = 0
 	private var resolution = ""
+	private var dynamicRange = ""
 	private let codec: String
 	private var lastInterval: Double = 0
 	private var history: [FrameSample] = []
@@ -166,6 +168,10 @@ final class StreamStats: @unchecked Sendable {
 		locked { decodeErrorsTotal += 1 }
 	}
 
+	func setDynamicRange(_ range: String) {
+		locked { dynamicRange = range }
+	}
+
 	func setResolution(width: Int32, height: Int32) {
 		locked { resolution = "\(width)×\(height)" }
 	}
@@ -202,6 +208,7 @@ final class StreamStats: @unchecked Sendable {
 			s.decodeErrors = decodeErrorsTotal
 			s.resolution = resolution
 			s.codec = codec
+			s.dynamicRange = dynamicRange
 			s.inputAvgMs = w.inputCount > 0 ? w.inputSum / Double(w.inputCount) : 0
 			s.inputMaxMs = w.inputMax
 			s.inputRateHz = Double(w.reports) / seconds

@@ -66,6 +66,8 @@ struct ConsoleKeys: Codable, Sendable {
 
 struct StreamSettings: Codable, Hashable, Sendable {
 	enum Resolution: String, Codable, CaseIterable, Identifiable {
+		// The PS5's Remote Play encoder refuses anything above 1080p ("AvCap failed to
+		// initialize video"), so 1440p and 4K aren't offered.
 		case p720 = "720p", p1080 = "1080p"
 		var id: String { rawValue }
 		var size: (width: UInt32, height: UInt32) {
@@ -74,11 +76,17 @@ struct StreamSettings: Codable, Hashable, Sendable {
 			case .p1080: (1920, 1080)
 			}
 		}
+
+		/// Settings saved with a resolution that's since been removed load as 1080p.
+		init(from decoder: Decoder) throws {
+			self = Resolution(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .p1080
+		}
 	}
 
 	enum Codec: String, Codable, CaseIterable, Identifiable {
-		case h264 = "H.264", hevc = "HEVC"
+		case h264 = "H.264", hevc = "HEVC", hevcHDR = "HEVC HDR"
 		var id: String { rawValue }
+		var isHEVC: Bool { self != .h264 }
 	}
 
 	var resolution: Resolution = .p1080

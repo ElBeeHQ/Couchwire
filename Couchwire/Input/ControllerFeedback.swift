@@ -16,7 +16,7 @@ final class ControllerFeedback: @unchecked Sendable {
 	private var rawTriggers: (left: [UInt8], right: [UInt8]) = (rawOff, rawOff)
 	private var hid: DualSenseHID?
 	/// Called on the HID queue for every input report from the DualSense.
-	var onInputReport: ((UInt64) -> Void)?
+	var onInputReport: ((UInt64, Bool?) -> Void)?
 	/// True while input reports are counted straight from the DualSense over HID.
 	var countsReports: Bool { hid != nil }
 	private var keepaliveTicks = 0

@@ -14,6 +14,8 @@ final class VideoDecoder: @unchecked Sendable {
 	enum Codec { case h264, hevc }
 
 	private let codec: Codec
+	/// Ask the decoder for 10-bit frames so HDR keeps its full range.
+	private let hdr: Bool
 	private let renderer: AVSampleBufferVideoRenderer
 	private let stats: StreamStats
 	private var formatDescription: CMVideoFormatDescription?
@@ -24,8 +26,9 @@ final class VideoDecoder: @unchecked Sendable {
 	/// Called when the decoder needs a fresh keyframe (e.g. after a decode failure).
 	var requestKeyframe: (() -> Void)?
 
-	init(codec: Codec, renderer: AVSampleBufferVideoRenderer, stats: StreamStats) {
+	init(codec: Codec, hdr: Bool = false, renderer: AVSampleBufferVideoRenderer, stats: StreamStats) {
 		self.codec = codec
+		self.hdr = hdr
 		self.renderer = renderer
 		self.stats = stats
 	}
@@ -150,13 +153,18 @@ final class VideoDecoder: @unchecked Sendable {
 
 		let dims = CMVideoFormatDescriptionGetDimensions(desc)
 		stats.setResolution(width: dims.width, height: dims.height)
-		log.info("Video format: \(dims.width)x\(dims.height)")
+		let transfer = CMFormatDescriptionGetExtension(desc, extensionKey: kCMFormatDescriptionExtension_TransferFunction) as? String ?? "unspecified"
+		let primaries = CMFormatDescriptionGetExtension(desc, extensionKey: kCMFormatDescriptionExtension_ColorPrimaries) as? String ?? "unspecified"
+		let isHDR = transfer == (kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String)
+			|| transfer == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
+		stats.setDynamicRange(isHDR ? (transfer.contains("2084") ? "HDR10" : "HLG") : "SDR")
+		log.info("Video format: \(dims.width)x\(dims.height), transfer \(transfer, privacy: .public), primaries \(primaries, privacy: .public)")
 
 		let spec: [CFString: Any] = [
 			kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true,
 		]
 		let attrs: [CFString: Any] = [
-			kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+			kCVPixelBufferPixelFormatTypeKey: hdr ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
 			kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
 			kCVPixelBufferMetalCompatibilityKey: true,
 		]

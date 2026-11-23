@@ -27,12 +27,12 @@ final class DualSenseHID: @unchecked Sendable {
 	/// so it outlives any callback still in flight.
 	private final class InputReports {
 		let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 128)
-		let handler: (UInt64) -> Void
-		init(handler: @escaping (UInt64) -> Void) { self.handler = handler }
+		let handler: (UInt64, Bool?) -> Void
+		init(handler: @escaping (UInt64, Bool?) -> Void) { self.handler = handler }
 		deinit { buffer.deallocate() }
 	}
 
-	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool, onInputReport: ((UInt64) -> Void)?) {
+	private init(manager: IOHIDManager, device: IOHIDDevice, isBluetooth: Bool, onInputReport: ((UInt64, Bool?) -> Void)?) {
 		self.manager = manager
 		self.device = device
 		self.isBluetooth = isBluetooth
@@ -41,15 +41,30 @@ final class DualSenseHID: @unchecked Sendable {
 			self.reports = reports
 			let context = Unmanaged.passRetained(reports)
 			IOHIDDeviceSetDispatchQueue(device, queue)
-			IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, reports.buffer, 128, { ctx, _, _, _, _, _, _, timeStamp in
+			IOHIDDeviceRegisterInputReportWithTimeStampCallback(device, reports.buffer, 128, { ctx, _, _, _, reportID, report, length, timeStamp in
 				guard let ctx else { return }
-				Unmanaged<InputReports>.fromOpaque(ctx).takeUnretainedValue().handler(timeStamp)
+				Unmanaged<InputReports>.fromOpaque(ctx).takeUnretainedValue()
+					.handler(timeStamp, DualSenseHID.psButton(reportID: reportID, report: report, length: length))
 			}, context.toOpaque())
 			IOHIDDeviceSetCancelHandler(device) { context.release() }
 			IOHIDDeviceActivate(device)
 		} else {
 			reports = nil
 		}
+	}
+
+	/// The PS button straight from the raw input report. macOS keeps it from GameController
+	/// (it opens the Games overlay), so this is the only reliable way to see it.
+	/// The buffer starts with the report ID. Byte offsets are from the DualSense report layout.
+	static func psButton(reportID: UInt32, report: UnsafeMutablePointer<UInt8>, length: CFIndex) -> Bool? {
+		let index: Int
+		switch (reportID, length) {
+		case (0x01, 64...): index = 10 // USB
+		case (0x31, 12...): index = 11 // Bluetooth, full report
+		case (0x01, 8...): index = 7   // Bluetooth, basic report
+		default: return nil
+		}
+		return report[index] & 0x01 != 0
 	}
 
 	deinit {
@@ -60,7 +75,7 @@ final class DualSenseHID: @unchecked Sendable {
 
 	/// Opens the first connected DualSense, or returns nil. `onInputReport` is called on the
 	/// HID queue for every input report with the kernel's arrival time (mach absolute time).
-	static func open(onInputReport: ((UInt64) -> Void)? = nil) -> DualSenseHID? {
+	static func open(onInputReport: ((UInt64, Bool?) -> Void)? = nil) -> DualSenseHID? {
 		let log = Logger(subsystem: "Couchwire", category: "Feedback")
 		let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
 		let matches = productIDs.map { [kIOHIDVendorIDKey: sonyVendorID, kIOHIDProductIDKey: $0] as CFDictionary }

@@ -20,7 +20,7 @@ struct StatsOverlay: View {
 					 "How much video the PS5 is sending. It rises in busy, detailed scenes.")
 			}
 			section("Video") {
-				item("Stream", "\(stats.resolution) \(stats.codec)",
+				item("Stream", "\(stats.resolution) \(stats.codec)" + (stats.dynamicRange == "SDR" || stats.dynamicRange.isEmpty ? "" : " · \(stats.dynamicRange)"),
 					 String(format: "%.0f fps on a %.0f Hz display.", stats.fps, stats.refreshHz))
 				item("Decode", "\(ms(stats.decodeAvgMs)) · \(ms(stats.decodeMaxMs)) worst",
 					 "Time your Mac takes to unpack each frame.", warn: stats.decodeMaxMs > 16)

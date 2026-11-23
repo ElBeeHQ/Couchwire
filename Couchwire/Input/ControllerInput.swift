@@ -29,18 +29,33 @@ final class ControllerInput: @unchecked Sendable {
 		return Double(info.numer) / Double(info.denom) / 1_000_000_000
 	}()
 
-	private func reportArrived(_ timeStamp: UInt64) {
+	/// PS button as read from the raw HID report. Only touched on `queue`.
+	private var hidPS = false
+	/// Written on the HID queue: the last PS state seen there, to only hop queues on change.
+	private var lastHIDPS = false
+
+	private func reportArrived(_ timeStamp: UInt64, ps: Bool?) {
 		os_unfair_lock_lock(&reportLock)
 		lastReportMach = timeStamp
 		os_unfair_lock_unlock(&reportLock)
 		stats?.inputReport()
+		if let ps, ps != lastHIDPS {
+			lastHIDPS = ps
+			queue.async { [self] in
+				hidPS = ps
+				if ps { state.buttons |= UInt32(CW_BUTTON_PS) } else if controller?.extendedGamepad?.buttonHome?.isPressed != true {
+					state.buttons &= ~UInt32(CW_BUTTON_PS)
+				}
+				send(state)
+			}
+		}
 	}
 
 	init(stats: StreamStats? = nil, send: @escaping (CWControllerState) -> Void) {
 		self.stats = stats
 		self.send = send
-		feedback.onInputReport = { [weak self] timeStamp in
-			self?.reportArrived(timeStamp)
+		feedback.onInputReport = { [weak self] timeStamp, ps in
+			self?.reportArrived(timeStamp, ps: ps)
 		}
 	}
 
@@ -72,6 +87,7 @@ final class ControllerInput: @unchecked Sendable {
 			controller?.extendedGamepad?.valueChangedHandler = nil
 			controller?.motion?.valueChangedHandler = nil
 			GCKeyboard.coalesced?.keyboardInput?.keyChangedHandler = nil
+			if let controller { claimSystemButtons(controller, false) }
 			feedback.detach()
 			controller = nil
 		}
@@ -121,13 +137,33 @@ final class ControllerInput: @unchecked Sendable {
 			motion.valueChangedHandler = { [weak self] m in self?.update(motion: m) }
 		}
 		feedback.attach(c)
+		claimSystemButtons(c, true)
 		update(from: pad)
+	}
+
+	/// macOS keeps the PS button (Games overlay / Launchpad) and the Create button (screenshots)
+	/// for itself unless the app asks for them. While streaming they belong to the console.
+	private func claimSystemButtons(_ c: GCController, _ claim: Bool) {
+		let state: GCControllerElement.SystemGestureState = claim ? .disabled : .enabled
+		DispatchQueue.main.async { [log] in
+			var elements: [GCControllerElement] = Array(c.physicalInputProfile.allElements)
+			if let pad = c.extendedGamepad {
+				elements += [pad.buttonHome, pad.buttonOptions, pad.buttonMenu].compactMap { $0 }
+			}
+			var names: [String] = []
+			for e in elements where e.isBoundToSystemGesture || e === c.extendedGamepad?.buttonHome {
+				e.preferredSystemGestureState = state
+				names.append((e.localizedName ?? "?") + (e.isBoundToSystemGesture ? "*" : ""))
+			}
+			log.info("System gestures \(claim ? "disabled" : "enabled", privacy: .public) for: \(names.joined(separator: ", "), privacy: .public)")
+		}
 	}
 
 	private func detach(_ c: GCController) {
 		guard c === controller else { return }
 		c.extendedGamepad?.valueChangedHandler = nil
 		c.motion?.valueChangedHandler = nil
+		claimSystemButtons(c, false)
 		feedback.detach()
 		controller = nil
 		let idle = cw_controller_idle()
@@ -174,6 +210,7 @@ final class ControllerInput: @unchecked Sendable {
 			setTouch(1, ds4.touchpadSecondary)
 		}
 
+		if hidPS { b |= UInt32(CW_BUTTON_PS) }
 		state.buttons = b | keyboardButtons
 		send(state)
 		recordInputTiming(pad)

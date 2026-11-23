@@ -91,6 +91,8 @@ void cw_regist_free(CWRegist *regist);
 typedef enum {
 	CW_CODEC_H264 = 0,
 	CW_CODEC_H265 = 1,
+	/// HEVC Main10 with HDR (PQ/HLG) when the game outputs it.
+	CW_CODEC_H265_HDR = 2,
 } CWCodec;
 
 typedef struct {
@@ -173,6 +175,15 @@ int cw_session_stop(CWSession *session);
 void cw_session_free(CWSession *session);
 int cw_session_set_controller(CWSession *session, const CWControllerState *state);
 int cw_session_set_login_pin(CWSession *session, const char *pin);
+
+#define CW_MIC_SAMPLE_RATE 48000
+/// Samples per channel in each microphone frame (10 ms).
+#define CW_MIC_FRAME_SAMPLES 480
+/// Unmute (connecting the mic on first use) or mute the microphone on the console.
+int cw_session_mic_set_muted(CWSession *session, bool muted);
+/// Send one frame: CW_MIC_FRAME_SAMPLES interleaved stereo samples (960 values).
+/// Call from one thread only.
+void cw_session_mic_frame(CWSession *session, int16_t *pcm);
 int cw_session_request_idr(CWSession *session);
 int cw_session_go_to_bed(CWSession *session);
 typedef struct {

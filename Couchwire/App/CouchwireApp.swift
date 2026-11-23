@@ -33,6 +33,11 @@ struct CouchwireApp: App {
 					.disabled(model.session == nil)
 				Toggle("Show Performance Stats", isOn: $showStats)
 					.keyboardShortcut("i", modifiers: [.command, .option])
+				Button(model.session?.micOn == true ? "Turn Microphone Off" : "Turn Microphone On") {
+					model.session?.toggleMicrophone()
+				}
+				.keyboardShortcut("m", modifiers: [.command, .control])
+				.disabled(model.session?.phase != .streaming)
 			}
 			CommandGroup(after: .windowArrangement) {
 				Button("End Session") { model.endSession() }

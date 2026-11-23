@@ -56,7 +56,12 @@ struct StreamSettingsFields: View {
 			Text("60 fps").tag(60)
 		}
 		Picker("Codec", selection: $settings.codec) {
-			ForEach(StreamSettings.Codec.allCases) { Text($0.rawValue).tag($0) }
+			ForEach(StreamSettings.Codec.allCases) { c in
+				Text(c.rawValue).tag(c)
+			}
+		}
+		if settings.codec == .hevcHDR {
+			Text("HDR shows when the game outputs it and HDR is on in the PS5's screen settings. Best on an XDR or HDR display.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 		}
 		LabeledContent("Bitrate") {
 			HStack {

@@ -28,6 +28,8 @@
 	<string>public.app-category.games</string>
 	<key>GCSupportsGameMode</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Couchwire sends your voice to the PS5 for game and party chat when you turn on the microphone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Couchwire finds and connects to PS5 consoles on your local network.</string>
 	<key>NSBonjourServices</key>
