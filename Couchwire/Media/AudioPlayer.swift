@@ -16,6 +16,9 @@ final class AudioPlayer: @unchecked Sendable {
 	var minimumLatency: TimeInterval = 0.02
 	/// The largest it may grow to. Mobile networks need more.
 	var maximumLatency: TimeInterval = 0.15
+	/// At home: once the network has been calm for a while, bring the reserve back down quickly
+	/// after a burst (a Wi-Fi scan, say), so the sound doesn't trail the picture for minutes.
+	var fastRecovery = false
 	private var sampleRate: Double = 48_000
 
 	/// The reserve now and how many gaps there have been, for the stats panel.
@@ -35,7 +38,7 @@ final class AudioPlayer: @unchecked Sendable {
 			self.sourceNode = nil
 		}
 		let ring = PCMRingBuffer(sampleRate: sampleRate, channels: channels,
-								 minimum: minimumLatency, maximum: maximumLatency)
+								 minimum: minimumLatency, maximum: maximumLatency, fastRecovery: fastRecovery)
 		self.ring = ring
 		self.sampleRate = sampleRate
 
@@ -104,6 +107,10 @@ final class AudioPlayer: @unchecked Sendable {
 /// The reserve starts at `minimum` and grows by 20 ms each time it runs dry (a gap you'd hear),
 /// up to `maximum`. After 10 s without a gap it shrinks by 5 ms, back towards `minimum`. A backlog
 /// is worked off by playing about 2% faster, which you can't hear, rather than by skipping ahead.
+///
+/// With `fastRecovery` (home), once there's been no gap for 30 s it shrinks by 10 ms every 3 s
+/// instead, and works off anything over the reserve, so it's back to normal in about half a
+/// minute. While gaps keep coming it stays up, as before.
 final class PCMRingBuffer: @unchecked Sendable {
 	private var storage: [Int16]
 	private var readIndex = 0
@@ -118,6 +125,11 @@ final class PCMRingBuffer: @unchecked Sendable {
 	private let step: Int
 	private let shrinkStep: Int
 	private let calmFrames: Int
+	private let fastRecovery: Bool
+	private let settledFrames: Int
+	private let fastShrinkStep: Int
+	private let fastCalmFrames: Int
+	private var lastGap = 0
 	/// Frames to have buffered before playing.
 	private var target: Int
 	private var framesPlayed = 0
@@ -127,7 +139,7 @@ final class PCMRingBuffer: @unchecked Sendable {
 	/// Ramps the first few frames after a gap up from silence, so restarts don't click.
 	private var fadeIn = 0
 
-	init(sampleRate: Double, channels: Int, minimum: TimeInterval, maximum: TimeInterval) {
+	init(sampleRate: Double, channels: Int, minimum: TimeInterval, maximum: TimeInterval, fastRecovery: Bool = false) {
 		self.channels = channels
 		// Room for 1 s, far beyond the largest reserve.
 		storage = [Int16](repeating: 0, count: Int(sampleRate) * channels)
@@ -136,6 +148,10 @@ final class PCMRingBuffer: @unchecked Sendable {
 		step = Int(sampleRate * 0.02)
 		shrinkStep = Int(sampleRate * 0.005)
 		calmFrames = Int(sampleRate * 10)
+		self.fastRecovery = fastRecovery
+		settledFrames = Int(sampleRate * 30)
+		fastShrinkStep = Int(sampleRate * 0.01)
+		fastCalmFrames = Int(sampleRate * 3)
 		target = minTarget
 	}
 
@@ -173,6 +189,8 @@ final class PCMRingBuffer: @unchecked Sendable {
 		defer { os_unfair_lock_unlock(&lock) }
 		let cap = storage.count
 		for frame in 0..<frames {
+			// Fast recovery only once there's been no gap for a while.
+			let settled = fastRecovery && framesPlayed - lastGap > settledFrames
 			if !primed && count / channels >= target {
 				primed = true
 				fadeIn = 64
@@ -188,7 +206,7 @@ final class PCMRingBuffer: @unchecked Sendable {
 				readIndex = (readIndex + channels) % cap
 				count -= channels
 				// Well over the reserve: drop one frame in 50 to catch up gently.
-				if count / channels > target * 2 + step {
+				if count / channels > (settled ? target + step : target * 2 + step) {
 					skipPhase += 1
 					if skipPhase >= 50, count >= channels {
 						skipPhase = 0
@@ -206,11 +224,12 @@ final class PCMRingBuffer: @unchecked Sendable {
 					underrunsTotal += 1
 					target = min(target + step, maxTarget)
 					lastChange = framesPlayed
+					lastGap = framesPlayed
 				}
 			}
 			framesPlayed += 1
-			if framesPlayed - lastChange > calmFrames, target > minTarget {
-				target = max(target - shrinkStep, minTarget)
+			if framesPlayed - lastChange > (settled ? fastCalmFrames : calmFrames), target > minTarget {
+				target = max(target - (settled ? fastShrinkStep : shrinkStep), minTarget)
 				lastChange = framesPlayed
 			}
 		}

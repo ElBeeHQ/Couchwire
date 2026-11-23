@@ -60,7 +60,12 @@ final class AppModel {
 	/// Why reconnecting gave up, shown in the stream window.
 	private(set) var reconnectError: String?
 	@ObservationIgnored private var reconnectTask: Task<Void, Never>?
-	var lastError: String?
+	/// Shown to the user, and written to the Timing log so a failed connect can be looked into later.
+	var lastError: String? {
+		didSet {
+			if let lastError { StreamSession.timing.notice("Error shown: \(lastError, privacy: .public)") }
+		}
+	}
 
 	@ObservationIgnored private var discovery: DiscoveryService?
 
@@ -230,6 +235,8 @@ final class AppModel {
 		}
 
 		let profile = profile(for: console.hostID)
+		let seen = discoveredState(of: console).map { "\($0.state) at \($0.address)" } ?? "not seen on this network"
+		StreamSession.timing.notice("Connect to \(console.nickname, privacy: .public): \(seen, privacy: .public)")
 		// Over the internet when the console can't be seen here. A console still listed from the network
 		// the Mac has just left doesn't count: its address isn't on this one.
 		let current = registered.first { $0.hostID == console.hostID } ?? console
@@ -332,11 +339,16 @@ final class AppModel {
 			if tick % 10 == 0, discoveredState(of: console)?.state != .ready,
 			   tick == 0 || discoveredState(of: console)?.state == .standby {
 				let address = registered.first { $0.hostID == console.hostID }?.lastAddress ?? console.lastAddress
-				_ = DiscoveryService.wake(address: address, keys: keys, ps5: console.isPS5)
+				let sent = DiscoveryService.wake(address: address, keys: keys, ps5: console.isPS5)
+				StreamSession.timing.notice("Wake \(sent ? "sent" : "failed to send", privacy: .public) to \(address, privacy: .public) at \(Double(tick) / 2, privacy: .public) s")
 			}
 			try? await Task.sleep(for: .milliseconds(500))
-			if discoveredState(of: console)?.state == .ready { return }
+			if discoveredState(of: console)?.state == .ready {
+				StreamSession.timing.notice("Console ready after \(Double(tick + 1) / 2, privacy: .public) s")
+				return
+			}
 		}
+		StreamSession.timing.notice("Console didn’t wake in 45 s")
 	}
 
 	/// The settings to stream with over `link`: the user's own, or automatic quality's pick under them.

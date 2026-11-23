@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- After a burst of Wi-Fi trouble at home (for example when your Mac scans for a hotspot), the sound catches up with the picture within about half a minute, instead of trailing it for several minutes.
+
+### Added
+
+- Couchwire writes a line of performance stats to the system log every 10 seconds while streaming, and logs each connect, wake-up and error message, so slow or failed connections can be looked into afterwards.
+
 ## v0.2.0: Play from anywhere
 
 *23 November 2026*

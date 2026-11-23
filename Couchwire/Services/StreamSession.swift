@@ -117,6 +117,7 @@ final class StreamSession {
 		media.owner = self
 		media.audio.minimumLatency = internet == nil ? 0.02 : 0.06
 		media.audio.maximumLatency = link == .internetMobile ? 0.25 : 0.15
+		media.audio.fastRecovery = internet == nil
 
 		var cfg = CWSessionConfig()
 		// Kept until cw_session_create returns; libchiaki copies what it needs.
@@ -419,6 +420,7 @@ final class StreamSession {
 		}
 		stats = snapshot
 		detector.add(snapshot)
+		logStats(snapshot)
 		if detector.struggling, !struggling {
 			struggleReason = detector.reason
 			struggling = true
@@ -439,6 +441,21 @@ final class StreamSession {
 
 	/// Don't learn from this session when it ends: the caller already has.
 	func skipLearning() { learned = true }
+
+	@ObservationIgnored private var statsTicks = 0
+
+	/// Every 10 s, one line of what the performance panel shows, so a slow or uneven stream can be
+	/// looked into afterwards (macOS keeps the log for a few days).
+	private func logStats(_ s: StreamStats.Snapshot) {
+		statsTicks += 1
+		guard statsTicks % 20 == 0 else { return }
+		let line = String(format: "%3.0fs %@ %@ %dfps %.0fMbps | total %.1f = controller %.1f + network %.1f + decode %.1f + smoothing %.1f + display %.1f ms (%.0f Hz) | jitter %.1f ms, loss %.1f%%, late %.0f%%, lost %d (%d recent), audio %.0f ms %d gaps (%d recent), %.0f fps, %.1f Mbps",
+			Double(statsTicks) / 2, link.rawValue, settings.resolution.rawValue, settings.fps, Double(settings.bitrate) / 1000,
+			s.observedMs, s.controllerMs, s.networkRttMs, s.decodeAvgMs, s.smoothingMs, s.displayWaitAvgMs, s.refreshHz,
+			s.pingJitterMs, s.packetLoss * 100, s.lateFrameRatio * 100, s.framesLost, s.recentFramesLost,
+			s.audioBufferMs, s.audioGaps, s.recentAudioGaps, s.fps, s.bitrateMbps)
+		Self.timing.notice("Stats \(line, privacy: .public)")
+	}
 
 	/// How the stream went, for automatic quality to learn from. Nil if it was too short to tell.
 	var outcome: ConnectionQuality.Outcome? { detector.outcome }
