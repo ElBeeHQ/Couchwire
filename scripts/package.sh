@@ -20,6 +20,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build/release"
 DERIVED="$OUT/DerivedData"
 IDENTITY="${SIGN_IDENTITY:--}"
+ENTITLEMENTS="Couchwire/Couchwire.entitlements"
+[ "$IDENTITY" != "-" ] && ENTITLEMENTS="Couchwire/Couchwire-DeveloperID.entitlements"
 RELEASES_REPO="ElBeeHQ/couchwire-releases"
 SPARKLE_ACCOUNT="couchwire"
 
@@ -30,7 +32,7 @@ mkdir -p "$OUT"
 
 echo "== Building Release"
 xcodebuild -project Couchwire.xcodeproj -scheme Couchwire -configuration Release \
-	-derivedDataPath "$DERIVED" CODE_SIGN_IDENTITY="$IDENTITY" OTHER_CODE_SIGN_FLAGS="--timestamp" \
+	-derivedDataPath "$DERIVED" CODE_SIGN_IDENTITY="$IDENTITY" CODE_SIGN_ENTITLEMENTS="$ENTITLEMENTS" OTHER_CODE_SIGN_FLAGS="--timestamp" \
 	build > "$OUT/build.log" 2>&1 || { tail -30 "$OUT/build.log"; exit 1; }
 APP="$DERIVED/Build/Products/Release/Couchwire.app"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
