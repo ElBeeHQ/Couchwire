@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.2.1: The PS button, and a tidier Settings
+
+*23 November 2026*
+
+The PS button can now go to your PS5 instead of opening Games on your Mac, Settings fits on a laptop screen, and the sound recovers faster after Wi-Fi trouble at home.
 
 ### Changed
 
