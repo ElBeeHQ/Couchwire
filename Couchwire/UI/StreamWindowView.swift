@@ -22,6 +22,9 @@ struct StreamWindowView: View {
 			.overlay {
 				if let session = model.session {
 					VideoLayerView(layer: session.displayLayer, stats: session.statsCollector)
+						// A quiet retry swaps in a new session with its own layer: build a fresh view for it,
+						// or the window keeps the old, empty layer and stays black.
+						.id(ObjectIdentifier(session))
 				} else if model.reconnecting == nil, model.reconnectError == nil {
 					Text("No active session").foregroundStyle(.secondary)
 				}
