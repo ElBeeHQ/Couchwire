@@ -108,22 +108,38 @@ final class AppModel {
 			}
 			waking.insert(console.hostID)
 			defer { waking.remove(console.hostID) }
-			_ = DiscoveryService.wake(address: console.lastAddress, keys: keys, ps5: console.isPS5)
-			// Wait up to 45 s for the console to report ready.
-			for _ in 0..<90 {
-				try? await Task.sleep(for: .milliseconds(500))
-				if discoveredState(of: console)?.state == .ready { break }
-			}
+			await wakeAndWait(console, keys: keys)
 			guard discoveredState(of: console)?.state == .ready else {
 				lastError = "\(console.nickname) didn’t wake up. Make sure “Enable Turning On PS5 from Network” is on in Settings › System › Power Saving."
 				return nil
 			}
+			// A PS5 reports "ready" a few seconds before Remote Play will accept a session.
+			try? await Task.sleep(for: .seconds(3))
 		}
 
-		let current = registered.first { $0.hostID == console.hostID } ?? console
-		let s = StreamSession(console: current, keys: keys, settings: profile.customStream ?? settings)
+		let s = makeSession(console, keys: keys, settings: profile.customStream ?? settings, retries: 3)
 		session = s
 		s.start()
+		return s
+	}
+
+	/// A session that, if the console turns out not to be ready yet, quietly tries again a few seconds later
+	/// (the stream window keeps showing "Connecting…").
+	private func makeSession(_ console: RegisteredConsole, keys: ConsoleKeys, settings: StreamSettings, retries: Int) -> StreamSession {
+		let current = registered.first { $0.hostID == console.hostID } ?? console
+		let s = StreamSession(console: current, keys: keys, settings: settings)
+		s.retryWhenNotReady = { [weak self] failed in
+			guard let self, retries > 0, self.session === failed else { return false }
+			Task { @MainActor in
+				try? await Task.sleep(for: .seconds(3))
+				// Ended or replaced in the meantime (the user closed the window).
+				guard self.session === failed else { return }
+				let next = self.makeSession(console, keys: keys, settings: settings, retries: retries - 1)
+				self.session = next
+				next.start()
+			}
+			return true
+		}
 		return s
 	}
 
@@ -134,13 +150,24 @@ final class AppModel {
 			return
 		}
 		waking.insert(console.hostID)
-		_ = DiscoveryService.wake(address: console.lastAddress, keys: keys, ps5: console.isPS5)
 		Task {
-			for _ in 0..<90 {
-				try? await Task.sleep(for: .milliseconds(500))
-				if discoveredState(of: console)?.state == .ready { break }
-			}
+			await wakeAndWait(console, keys: keys)
 			waking.remove(console.hostID)
+		}
+	}
+
+	/// Sends the wake signal and waits up to 45 s for the console to report ready. The signal is one UDP
+	/// packet that can be lost, and a PS5 that has only just gone into rest mode ignores it while it settles,
+	/// so it's sent again every 5 s for as long as the console still reports rest mode.
+	private func wakeAndWait(_ console: RegisteredConsole, keys: ConsoleKeys) async {
+		for tick in 0..<90 {
+			if tick % 10 == 0, discoveredState(of: console)?.state != .ready,
+			   tick == 0 || discoveredState(of: console)?.state == .standby {
+				let address = registered.first { $0.hostID == console.hostID }?.lastAddress ?? console.lastAddress
+				_ = DiscoveryService.wake(address: address, keys: keys, ps5: console.isPS5)
+			}
+			try? await Task.sleep(for: .milliseconds(500))
+			if discoveredState(of: console)?.state == .ready { return }
 		}
 	}
 

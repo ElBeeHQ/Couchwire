@@ -14,6 +14,7 @@ enum AboutPanel {
 		}
 		NSApp.orderFrontStandardAboutPanel(options: options)
 		NSApp.activate()
+		DispatchQueue.main.async(execute: tidyLinks)
 	}
 
 	private static func credits() -> NSAttributedString {
@@ -40,19 +41,25 @@ enum AboutPanel {
 		madeBy(into: text, centred: centred)
 		links([("elbeehq.com", ElBeeLinks.website), ("What’s New", ElBeeLinks.releaseNotes),
 			   ("Report a Problem", ElBeeLinks.reportProblem)])
-		add("\nLicence\n", font: bold)
-		add("Free software under the GNU AGPL v3.0, with the OpenSSL exception. No warranty.\n", colour: .secondaryLabelColor)
-		links([("Licence", licence("Couchwire-Licence")), ("Source Code", ElBeeLinks.source), ("Legal & Terms", ElBeeLinks.legal)])
-		add("\nThird-Party Software\n", font: bold)
-		add("chiaki-ng (libchiaki), AGPL-3.0\n", colour: .secondaryLabelColor)
-		links([("Source", URL(string: "https://github.com/streetpea/chiaki-ng"))])
-		add("OpenSSL, Apache-2.0 · curl, curl licence\n", colour: .secondaryLabelColor)
-		add("Opus, libevent, miniupnpc, Jerasure, GF-Complete, BSD · json-c, MIT · nanopb, zlib\n", colour: .secondaryLabelColor)
-		add("Sparkle, MIT\n", colour: .secondaryLabelColor)
-		links([("All Notices", licence("ThirdPartyNotices"))])
-		add("\nPlayStation, PS5 and DualSense are trademarks of Sony Interactive Entertainment Inc. Couchwire is not made, endorsed or supported by Sony.",
-			colour: .secondaryLabelColor)
+		// Short enough to fit the panel without scrolling; the full third-party list is in Notices.
+		add("\nFree software under the GNU AGPL v3.0,\nprovided without warranty.\n", colour: .secondaryLabelColor)
+		links([("Licence", licence("Couchwire-Licence")), ("Source Code", ElBeeLinks.source),
+			   ("Notices", licence("ThirdPartyNotices")), ("Legal", ElBeeLinks.legal)])
 		return text
+	}
+
+	/// Links in the credits in the accent colour without underlines, as macOS's own panels show them.
+	private static func tidyLinks() {
+		for window in NSApp.windows where window.isVisible {
+			for view in textViews(in: window.contentView) where view.string.hasPrefix("\nMade by") {
+				view.linkTextAttributes = [.foregroundColor: NSColor.linkColor, .cursor: NSCursor.pointingHand]
+			}
+		}
+	}
+
+	private static func textViews(in view: NSView?) -> [NSTextView] {
+		guard let view else { return [] }
+		return ((view as? NSTextView).map { [$0] } ?? []) + view.subviews.flatMap { textViews(in: $0) }
 	}
 
 	/// "Made by" and the ElBeeHQ logo (E1) above the links and licences: the full-colour hive (its open cell follows Light

@@ -19,6 +19,7 @@ struct ConsoleBrowserView: View {
 								title: console.nickname,
 								subtitle: subtitle(for: console),
 								state: model.discoveredState(of: console)?.state,
+								waking: model.waking.contains(console.hostID),
 								busy: connecting == console.hostID || model.waking.contains(console.hostID),
 								actionTitle: "Play",
 								settings: { editing = console }
@@ -89,6 +90,8 @@ struct ConsoleBrowserView: View {
 	}
 
 	private func subtitle(for console: RegisteredConsole) -> String {
+		// While waking the PS5 drops off the network for a few seconds; that isn't "Offline".
+		if model.waking.contains(console.hostID) { return "Waking up…" }
 		guard let d = model.discoveredState(of: console) else { return "Offline · \(console.lastAddress)" }
 		if let app = d.runningApp { return app }
 		return d.state == .standby ? "Rest Mode" : "Ready"
@@ -125,6 +128,7 @@ struct ConsoleCard: View {
 	let title: String
 	let subtitle: String
 	let state: DiscoveredConsole.State?
+	var waking = false
 	let busy: Bool
 	let actionTitle: String
 	var settings: (() -> Void)? = nil
@@ -173,11 +177,12 @@ struct ConsoleCard: View {
 	}
 
 	@ViewBuilder private var statusBadge: some View {
-		let (label, color): (String, Color) = switch state {
-		case .ready: ("On", .green)
-		case .standby: ("Rest Mode", .orange)
-		case .unknown: ("Unknown", .gray)
-		case nil: ("Offline", .gray)
+		let (label, color): (String, Color) = switch (waking, state) {
+		case (true, _): ("Waking", .orange)
+		case (_, .ready): ("On", .green)
+		case (_, .standby): ("Rest Mode", .orange)
+		case (_, .unknown): ("Unknown", .gray)
+		case (_, nil): ("Offline", .gray)
 		}
 		Label(label, systemImage: "circle.fill")
 			.labelStyle(BadgeLabelStyle(color: color))

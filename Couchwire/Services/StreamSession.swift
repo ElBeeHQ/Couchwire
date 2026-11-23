@@ -125,10 +125,10 @@ final class StreamSession {
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
 			sink.input?.haptics(UnsafeBufferPointer(start: buf, count: frames * 2), frames: frames)
 		}
-		callbacks.quit = { _, isError, reason, user in
+		callbacks.quit = { code, isError, reason, user in
 			let sink = Unmanaged<MediaSink>.fromOpaque(user!).takeUnretainedValue()
 			let msg = isError ? reason.map { String(cString: $0) } ?? "Disconnected" : nil
-			Task { @MainActor in sink.owner?.didQuit(error: msg) }
+			Task { @MainActor in sink.owner?.didQuit(reason: code, error: msg) }
 		}
 
 		var err: Int32 = 0
@@ -219,8 +219,29 @@ final class StreamSession {
 		input?.start()
 	}
 
-	private func didQuit(error: String?) {
+	/// libchiaki quit reasons (ChiakiQuitReason) that mean the console wasn't ready to start a session yet,
+	/// as happens for a few seconds after it wakes from rest mode or is switched on.
+	private static let notReadyReasons: Set<Int32> = [
+		2, // SESSION_REQUEST_UNKNOWN
+		3, // SESSION_REQUEST_CONNECTION_REFUSED
+		7, // CTRL_UNKNOWN
+		8, // CTRL_CONNECT_FAILED
+		9, // CTRL_CONNECTION_REFUSED
+	]
+
+	/// Asked when the session fails before any video because the console wasn't ready. Return true to say a
+	/// new attempt is coming: this session then stays "connecting" instead of showing the error.
+	@ObservationIgnored var retryWhenNotReady: ((StreamSession) -> Bool)?
+
+	private func didQuit(reason: Int32, error: String?) {
+		if phase == .connecting, Self.notReadyReasons.contains(reason), retryWhenNotReady?(self) == true {
+			teardown()
+			return
+		}
 		var error = error
+		if phase == .connecting, Self.notReadyReasons.contains(reason) {
+			error = "\(console.nickname) isn’t ready to stream yet. Wait a moment, then press Play again."
+		}
 		if let e = error, e.contains("AvCap failed to initialize video") {
 			// The console's encoder refused the requested resolution or codec.
 			error = "The PS5 couldn’t start video with these settings. Try 1080p, or a different codec, in this console’s settings."

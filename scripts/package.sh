@@ -11,7 +11,7 @@
 #                                      app's update feed, read from main)
 #
 # Every DMG is signed with Couchwire's Sparkle EdDSA key (login keychain, account
-# "couchwire") and added to the appcast. Bump CFBundleVersion in Info.plist for each release:
+# "couchwire") and added to the appcast. Bump CFBundleVersion (kept equal to the version, e.g. 0.1.1) in Info.plist for each release:
 # Sparkle compares it to decide whether an update is newer. Release notes come from
 # release-notes/<version>.md.
 #
