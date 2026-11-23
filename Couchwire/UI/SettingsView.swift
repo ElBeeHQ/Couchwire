@@ -3,12 +3,22 @@ import SwiftUI
 struct SettingsView: View {
 	@Environment(AppModel.self) private var model
 	@State private var signingIn = false
+	@AppStorage(ControllerInput.touchGesturesKey) private var touchGestures = false
 
 	var body: some View {
 		@Bindable var model = model
 		Form {
 			Section("Video") {
 				StreamSettingsFields(settings: $model.settings)
+			}
+			Section {
+				Toggle("Send Touchpad Swipes", isOn: $touchGestures)
+			} header: {
+				Text("Controller")
+			} footer: {
+				Text("Over Remote Play the PS5 treats any finger on the touchpad as a press. Leave this off unless a game needs swipes; clicking the touchpad always works.")
+					.font(.caption)
+					.foregroundStyle(.secondary)
 			}
 			Section {
 				LabeledContent("PSN Account ID") {
