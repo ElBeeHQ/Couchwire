@@ -21,6 +21,13 @@
   <a href="https://elbeehq.com/privacy"><img src="https://img.shields.io/badge/privacy-no%20tracking-FFB020" alt="Privacy: no tracking"></a>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-dark.png">
+    <img src="assets/screenshot-light.png" alt="Couchwire's console list with made-up consoles: Living Room PS5 switched on, Bedroom PS5 in rest mode, and Study PS5 nearby, ready to pair" width="760">
+  </picture>
+</p>
+
 Couchwire streams your PS5 to your Mac over your home network. It's built for macOS from the ground up, with full
 DualSense support, HDR and low latency.
 
@@ -93,7 +100,7 @@ open Couchwire.xcodeproj
 [What's New](CHANGELOG.md) · [Help](https://elbeehq.com/support) · [Report a problem](https://github.com/ElBeeHQ/Couchwire/issues) ·
 [Privacy](https://elbeehq.com/privacy) · [Legal & Terms](https://elbeehq.com/legal) · [elbeehq.com](https://elbeehq.com)
 
-<sub>ElBeeHQ is not affiliated with, endorsed by or sponsored by Sony Interactive Entertainment or Apple. PlayStation,
+<sub>ElBeeHQ is not affiliated with, endorsed by or sponsored by Sony Interactive Entertainment or Apple. The screenshot shows made-up consoles. PlayStation,
 PS5, DualSense and DualShock are trademarks of Sony Interactive Entertainment Inc. Mac and macOS are trademarks of
 Apple Inc. Xbox is a trademark of Microsoft Corporation. Other names belong to their owners and are used only to
 describe compatibility.</sub>
