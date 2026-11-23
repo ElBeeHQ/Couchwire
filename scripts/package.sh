@@ -6,14 +6,21 @@
 #   SIGN_IDENTITY="Developer ID Application: …" NOTARY_PROFILE=couchwire scripts/package.sh
 #                                      Developer ID signed, notarized and stapled
 #                                      (profile from `xcrun notarytool store-credentials`)
-#   PUBLISH=1 scripts/package.sh       also uploads the DMG and appcast as a GitHub release
-#                                      on ElBeeHQ/couchwire-releases (the app's update feed)
+#   PUBLISH=1 scripts/package.sh       also publishes the GitHub release on ElBeeHQ/Couchwire,
+#                                      then commits and pushes the updated appcast.xml (the
+#                                      app's update feed, read from main)
 #
 # Every DMG is signed with Couchwire's Sparkle EdDSA key (login keychain, account
-# "couchwire") and gets an appcast.xml. Bump CFBundleVersion in Info.plist for each release:
-# Sparkle compares it to decide whether an update is newer.
+# "couchwire") and added to the appcast. Bump CFBundleVersion in Info.plist for each release:
+# Sparkle compares it to decide whether an update is newer. Release notes come from
+# release-notes/<version>.md.
 #
-# Output: build/release/Couchwire-<version>.dmg and build/release/appcast.xml
+# Couchwire is AGPL-3.0 (with the OpenSSL exception), so every published DMG ships with its
+# Corresponding Source: Couchwire-<version>-source.tar.gz (this repo and chiaki-ng at the
+# commits built) and Couchwire-<version>-dependencies-source.tar (the exact upstream sources
+# scripts/build-deps.sh builds, OpenSSL included). Publishing needs a clean working tree.
+#
+# Output in build/release: the DMG, appcast.xml and both source archives
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -22,12 +29,16 @@ DERIVED="$OUT/DerivedData"
 IDENTITY="${SIGN_IDENTITY:--}"
 ENTITLEMENTS="Couchwire/Couchwire.entitlements"
 [ "$IDENTITY" != "-" ] && ENTITLEMENTS="Couchwire/Couchwire-DeveloperID.entitlements"
-RELEASES_REPO="ElBeeHQ/couchwire-releases"
+RELEASES_REPO="ElBeeHQ/Couchwire"
 SPARKLE_ACCOUNT="couchwire"
 
 cd "$ROOT"
+if [ "${PUBLISH:-}" = "1" ] && [ -n "$(git status --porcelain --ignore-submodules=none)" ]; then
+	echo "Commit your changes first: the published source must match the build." >&2
+	exit 1
+fi
 xcodegen generate > /dev/null
-rm -rf "$OUT"/*.dmg "$OUT/appcast.xml" "$OUT/dmg"  # keep DerivedData (and the Sparkle download)
+rm -rf "$OUT"/*.dmg "$OUT"/*.tar* "$OUT/appcast.xml" "$OUT/dmg"  # keep DerivedData (and the Sparkle download)
 mkdir -p "$OUT"
 
 echo "== Building Release"
@@ -63,22 +74,53 @@ if [ -n "${NOTARY_PROFILE:-}" ]; then
 	xcrun stapler staple "$DMG"
 fi
 
+echo "== Source archives (AGPL Corresponding Source)"
+SRC_TAR="$OUT/Couchwire-$VERSION-source.tar.gz"
+PARTS="$OUT/src-parts"
+rm -rf "$PARTS"; mkdir -p "$PARTS"
+git archive --prefix="Couchwire-$VERSION/" -o "$PARTS/0.tar" HEAD
+n=1
+# Every initialised submodule (chiaki-ng and the ones it builds from), at the commit used.
+while read -r sub; do
+	git -C "$sub" archive --prefix="Couchwire-$VERSION/$sub/" -o "$PARTS/$n.tar" HEAD
+	n=$((n + 1))
+done < <(git submodule foreach --recursive --quiet 'echo "$displaypath"')
+tar -czf "$SRC_TAR" $(for f in "$PARTS"/*.tar; do echo "@$f"; done)
+rm -rf "$PARTS"
+DEPS_TAR="$OUT/Couchwire-$VERSION-dependencies-source.tar"
+[ -d build/deps/src ] || { echo "build/deps/src is missing; run scripts/build-deps.sh" >&2; exit 1; }
+tar -cf "$DEPS_TAR" -C build/deps src
+ls -lh "$SRC_TAR" "$DEPS_TAR" | awk '{print "   ", $5, $NF}'
+
 echo "== Signing the update and writing the appcast"
 SPARKLE_BIN="$DERIVED/SourcePackages/artifacts/sparkle/Sparkle/bin"
 FEED="$OUT/feed"
-mkdir -p "$FEED"
-mv "$DMG" "$FEED/"
-"$SPARKLE_BIN/generate_appcast" --account "$SPARKLE_ACCOUNT" \
+rm -rf "$FEED"; mkdir -p "$FEED"
+# Start from the published feed so earlier releases stay listed.
+[ -f appcast.xml ] && cp appcast.xml "$FEED/appcast.xml"
+NOTES="release-notes/$VERSION.md"
+cp "$DMG" "$FEED/"
+[ -f "$NOTES" ] && cp "$NOTES" "$FEED/$(basename "$DMG" .dmg).md"
+"$SPARKLE_BIN/generate_appcast" --account "$SPARKLE_ACCOUNT" --embed-release-notes \
 	--download-url-prefix "https://github.com/$RELEASES_REPO/releases/download/v$VERSION/" \
-	-o "$OUT/appcast.xml" "$FEED"
-mv "$FEED/$(basename "$DMG")" "$DMG"
+	--link "https://github.com/$RELEASES_REPO" "$FEED"
+cp "$FEED/appcast.xml" "$OUT/appcast.xml"
 rm -rf "$FEED"
 grep -q "sparkle:edSignature" "$OUT/appcast.xml" || { echo "appcast has no EdDSA signature" >&2; exit 1; }
 
 if [ "${PUBLISH:-}" = "1" ]; then
+	[ -f "$NOTES" ] || { echo "Write $NOTES first." >&2; exit 1; }
+	TITLE="Couchwire $VERSION"
+	FIRST="$(head -1 "$NOTES")"
+	[[ "$FIRST" == "# "* ]] && TITLE="${FIRST#\# }"
 	echo "== Publishing v$VERSION to $RELEASES_REPO"
-	gh release create "v$VERSION" "$DMG" "$OUT/appcast.xml" --repo "$RELEASES_REPO" \
-		--title "Couchwire $VERSION" --notes "Couchwire $VERSION"
+	gh release create "v$VERSION" "$DMG" "$SRC_TAR" "$DEPS_TAR" --repo "$RELEASES_REPO" --target "$(git rev-parse HEAD)" \
+		--title "$TITLE" --notes-file <(tail -n +2 "$NOTES")
+	echo "== Updating the update feed"
+	cp "$OUT/appcast.xml" appcast.xml
+	git add appcast.xml
+	git -c user.name=ElBeeHQ -c user.email=hello@elbeehq.com commit -q -m "Add Couchwire $VERSION to the update feed"
+	git push -q
 fi
 
 echo "Done: $DMG"

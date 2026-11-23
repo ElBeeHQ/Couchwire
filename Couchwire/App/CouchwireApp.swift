@@ -48,7 +48,8 @@ struct CouchwireApp: App {
 		}
 
 		.commands {
-			CommandGroup(after: .appInfo) {
+			CommandGroup(replacing: .appInfo) {
+				Button("About Couchwire") { AboutPanel.show() }
 				CheckForUpdatesButton()
 			}
 			CommandGroup(replacing: .help) {
