@@ -1,6 +1,6 @@
-# PSStream
+# Couchwire
 
-A native macOS (SwiftUI/AppKit) PS5 Remote Play client, built for low latency.
+A native macOS (SwiftUI/AppKit) client for playing your PS5 on a Mac, built for low latency. Made by ElBeeHQ; not affiliated with or endorsed by Sony Interactive Entertainment.
 
 The Remote Play protocol core (discovery, pairing, Takion transport, crypto, FEC) is
 [chiaki-ng](https://github.com/streetpea/chiaki-ng)'s `libchiaki`, vendored as a submodule
@@ -22,7 +22,7 @@ git submodule update --init Vendor/chiaki-ng
 git -C Vendor/chiaki-ng submodule update --init third-party/gf-complete third-party/jerasure third-party/nanopb
 ./scripts/build-chiaki.sh
 xcodegen generate
-open PSStream.xcodeproj
+open Couchwire.xcodeproj
 ```
 
 ## First connection
@@ -30,7 +30,7 @@ open PSStream.xcodeproj
 1. On the PS5: **Settings › System › Remote Play** → enable Remote Play, then **Link Device** to show an 8-digit code.
    For wake-from-rest, also enable **Settings › System › Power Saving › Features Available in Rest Mode › Stay Connected to the Internet / Enable Turning On PS5 from Network**.
 2. You need your **PSN Account ID** (Base64, 8 bytes — not your sign-in ID). In-app PSN sign-in to fetch it automatically is planned; for now use one of the community lookup tools.
-3. Launch PSStream; the PS5 appears under *Nearby*. Click **Pair…**, enter the Account ID and code.
+3. Launch Couchwire; the PS5 appears under *Nearby*. Click **Pair…**, enter the Account ID and code.
 4. Click **Play**. Defaults: 1080p60, HEVC, 30 Mbps.
 
 ## Latency tips
@@ -41,4 +41,4 @@ open PSStream.xcodeproj
 
 ## License
 
-libchiaki is AGPL-3.0; distributing PSStream binaries therefore requires releasing PSStream's source under AGPL-3.0 too.
+libchiaki is AGPL-3.0; distributing Couchwire binaries therefore requires releasing Couchwire's source under AGPL-3.0 too.

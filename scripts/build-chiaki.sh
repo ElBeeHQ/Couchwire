@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds libchiaki (the PlayStation Remote Play protocol core from chiaki-ng)
-# as a static library for the PSStream macOS app.
+# as a static library for the Couchwire macOS app.
 #
 # Prereqs (Homebrew): cmake pkg-config protobuf json-c miniupnpc libevent curl openssl opus
 # A Python venv at .venv with `protobuf` is used for nanopb code generation.

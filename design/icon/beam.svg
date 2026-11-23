@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Beam: three streaks travelling right into a rounded play shape -->
+  <g fill="#000">
+    <rect x="150" y="376" width="240" height="56" rx="28"/>
+    <rect x="96"  y="484" width="294" height="56" rx="28"/>
+    <rect x="150" y="592" width="240" height="56" rx="28"/>
+  </g>
+  <path d="M494 322 L494 702 L822 512 Z" fill="#000" stroke="#000" stroke-width="72" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Pulse: a play shape sending rings outward -->
+  <path d="M232 378 L232 646 L464 512 Z" fill="#000" stroke="#000" stroke-width="64" stroke-linejoin="round"/>
+  <g fill="none" stroke="#000" stroke-width="60" stroke-linecap="round">
+    <path d="M547 349 A220 220 0 0 1 547 675"/>
+    <path d="M628 259 A340 340 0 0 1 628 765"/>
+  </g>
+</svg>
