@@ -3,6 +3,40 @@
     <channel>
         <title>Couchwire</title>
         <item>
+            <title>0.2.4</title>
+            <pubDate>Mon, 23 Nov 2026 22:00:11 +0000</pubDate>
+            <link>https://github.com/ElBeeHQ/Couchwire</link>
+            <sparkle:version>0.2.4</sparkle:version>
+            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.4: Rumble that feels right, and quicker reconnects
+
+*23 November 2026*
+
+Vibration and trigger effects follow your PS5 more closely, full DualSense haptics start when you plug in a cable mid-game, and Couchwire gets back to your game faster after a network change.
+
+### Changed
+
+- **Vibration follows your PS5's settings.** Couchwire now uses the PS5's Vibration Intensity and Trigger Effect Intensity settings. Weak and Medium soften the rumble and the triggers, and Off turns them off.
+- **Gentler rumble over Bluetooth.** Over Bluetooth the controller can't play the PS5's haptics directly, so Couchwire turns them into rumble. That rumble is now less heavy-handed, ignores very faint signals and never falls behind the game.
+- **Quicker reconnects.** After a network change, or when you close a stream and press Play again, the PS5 takes a few seconds to let go of the old stream. Couchwire now asks again every second while it waits, and says it's waiting, instead of showing "already in use". Back on your home network it reconnects as soon as it finds the PS5.
+- **The struggling banner goes away** once the stream recovers, and comes back only if it gets bad again.
+
+### Fixed
+
+- **Full haptics over USB mid-game.** Plugging the controller in with a cable during a stream now switches to the DualSense's full haptics within a second or two. Before, it stayed on Bluetooth-style rumble until the next stream.
+- **Trigger effects no longer restart by themselves.** Couchwire re-sent them every second, which could restart a vibrating trigger effect or click a weapon trigger again.
+- **Moving from home Wi-Fi to a hotspot** goes over the internet straight away, instead of trying the home address again first.
+- **A reconnect no longer lowers your quality.** The first 30 seconds after a network change, while the Wi-Fi settles, no longer count towards automatic quality or bring up the struggling banner.
+
+**Update:** Couchwire 0.1.0 and later offer this update by themselves; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.4.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
+
+**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.4-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.4-dependencies-source.tar` holds the exact sources of the libraries it's built with.
+]]></description>
+            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.4/Couchwire-0.2.4.dmg" length="7132672" type="application/octet-stream" sparkle:edSignature="rquyAEMX+gF5Z+BUm2G1UDuXvp8sy1UT8i3tKV5npyTmTfwLfmX0bsHeOLMlXgH/fTMe6THAP8LNoy/ySRG0BQ=="/>
+        </item>
+        <item>
             <title>0.2.3</title>
             <pubDate>Mon, 23 Nov 2026 18:26:08 +0000</pubDate>
             <link>https://github.com/ElBeeHQ/Couchwire</link>
@@ -65,43 +99,6 @@ Automatic smoothing adds far less delay on a mobile hotspot, automatic quality g
 **Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.2-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.2-dependencies-source.tar` holds the exact sources of the libraries it's built with.
 ]]></description>
             <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.2/Couchwire-0.2.2.dmg" length="7125507" type="application/octet-stream" sparkle:edSignature="ABItbuv1mw15pLxjj8RWvfo/NX3/zioCGMZ6PRxo5En/4r7DhhKtiMJckIsUjajTlZns7UCio88Vk6JWsudJAw=="/>
-        </item>
-        <item>
-            <title>0.2.1</title>
-            <pubDate>Mon, 23 Nov 2026 16:08:47 +0000</pubDate>
-            <link>https://github.com/ElBeeHQ/Couchwire</link>
-            <sparkle:version>0.2.1</sparkle:version>
-            <sparkle:shortVersionString>0.2.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.1: The PS button, and a tidier Settings
-
-*23 November 2026*
-
-The PS button can now go to your PS5 instead of opening Games on your Mac, Settings fits on a laptop screen, and the sound recovers faster after Wi-Fi trouble at home.
-
-### Changed
-
-- Settings is split into Video, Account and Updates tabs, so it fits on a laptop screen. Internet Play is under Account.
-
-### Fixed
-
-- On a network that won't allow a direct connection to your PS5 (some mobile networks), Couchwire now says so after two tries instead of retrying for two minutes.
-- The connecting steps no longer say they're waking your PS5 when it's already on. After a network change they say they're reconnecting, explain the wait while the PS5 lets go of the old stream, and number each new try.
-- After a burst of Wi-Fi trouble at home (for example when your Mac scans for a hotspot), the sound catches up with the picture within about half a minute, instead of trailing it for several minutes.
-
-### Added
-
-- The first time you stream with a DualSense or another controller with a Home button, Couchwire explains how to send the PS button to your PS5 instead of opening Games on your Mac, with a button that opens Game Controllers settings.
-- Couchwire writes a line of performance stats to the system log every 10 seconds while streaming, and logs each connect, wake-up and error message, so slow or failed connections can be looked into afterwards.
-
-**If the PS button opens Games on your Mac:** open System Settings › Game Controllers and add Couchwire to **Home Button Overrides**. Couchwire shows this tip the first time you stream with a controller.
-
-**Update:** Couchwire 0.1.0 and 0.2.0 offer this update by themselves; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.1.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
-
-**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.1-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.1-dependencies-source.tar` holds the exact sources of the libraries it's built with.
-]]></description>
-            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.1/Couchwire-0.2.1.dmg" length="7092729" type="application/octet-stream" sparkle:edSignature="ZAjc3ZOu7MY2lw3/S9vnnMFHRb82eBPqqBIXWUoDz2/UPXYbj77y3yWHLFyFEdz8NJK/szQP+UAXKKfWK+dVDQ=="/>
         </item>
     </channel>
 </rss>
