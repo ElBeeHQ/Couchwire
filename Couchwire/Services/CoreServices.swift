@@ -58,10 +58,10 @@ enum RegistrationError: LocalizedError {
 	case invalidAccountID, invalidPIN, failedToStart, rejected
 	var errorDescription: String? {
 		switch self {
-		case .invalidAccountID: "The PSN Account ID must be 8 bytes encoded as Base64 (12 characters ending in “=”)."
+		case .invalidAccountID: "That Account ID doesn’t look right. It’s 12 characters ending in “=”. Signing in fills it in for you."
 		case .invalidPIN: "Enter the 8-digit code shown on your PS5."
-		case .failedToStart: "Couldn’t contact the console."
-		case .rejected: "The console rejected the pairing request. Check the code and Account ID, then try again."
+		case .failedToStart: "Couldn’t reach the PS5. Check it’s switched on and on the same network as your Mac."
+		case .rejected: "The PS5 didn’t accept the code. Check you typed the code shown on the TV, or choose Link Device again for a new one. If it still fails, make sure you signed in with the PSN account you use on this PS5."
 		}
 	}
 }

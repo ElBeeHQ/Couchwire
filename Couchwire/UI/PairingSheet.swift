@@ -14,13 +14,18 @@ struct PairingSheet: View {
 		VStack(alignment: .leading, spacing: 16) {
 			Text(target.name.map { "Pair with \($0)" } ?? "Pair with a Console")
 				.font(.title2.weight(.semibold))
-			Text("On your PS5, go to Settings › System › Remote Play › Link Device, then enter the code shown on screen.")
+			VStack(alignment: .leading, spacing: 6) {
+				step(1, "On your PS5, go to **Settings › System › Remote Play** and choose **Link Device**.")
+				step(2, "The TV shows an 8-digit code. Type it below and click Pair.")
+			}
+			Text("If the code disappears before you finish, choose Link Device again for a new one.")
+				.font(.caption)
 				.foregroundStyle(.secondary)
 				.fixedSize(horizontal: false, vertical: true)
 
 			Form {
 				if target.name == nil {
-					TextField("IP Address", text: $target.address, prompt: Text("192.168.1.20"))
+					TextField("PS5 IP Address", text: $target.address, prompt: Text("e.g. 192.168.1.20"))
 				}
 				LabeledContent("PSN Account") {
 					HStack {
@@ -33,7 +38,7 @@ struct PairingSheet: View {
 						Button(model.accountID.isEmpty ? "Sign In…" : "Change…") { signingIn = true }
 					}
 				}
-				TextField("Code", text: $pin, prompt: Text("8 digits"))
+				TextField("Code from TV", text: $pin, prompt: Text("8 digits"))
 					.font(.body.monospacedDigit())
 			}
 			.formStyle(.grouped)
@@ -77,6 +82,13 @@ struct PairingSheet: View {
 			}
 			working = false
 		}
+	}
+}
+
+private func step(_ n: Int, _ text: LocalizedStringKey) -> some View {
+	HStack(alignment: .top, spacing: 8) {
+		Text("\(n).").foregroundStyle(.secondary).monospacedDigit()
+		Text(text).fixedSize(horizontal: false, vertical: true)
 	}
 }
 
