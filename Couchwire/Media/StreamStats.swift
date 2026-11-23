@@ -113,6 +113,12 @@ final class StreamStats: @unchecked Sendable {
 		targetFps = Double(fps)
 	}
 
+	/// How long since the last frame arrived; 0 before the first.
+	var secondsSinceLastFrame: Double {
+		let now = CACurrentMediaTime()
+		return locked { lastArrival > 0 ? now - lastArrival : 0 }
+	}
+
 	/// The latest frame is due on screen at `at` (host time).
 	func frameShown(at: CFTimeInterval) {
 		locked {

@@ -116,6 +116,9 @@ typedef struct {
 	/// Internet play: guess ports even when the NAT looks friendly. Helps with double NAT and
 	/// some mobile hotspots; slower.
 	bool psn_force_port_guessing;
+	/// Internet play: don't look for a UPnP router first. Mobile hotspots never have one, and the
+	/// search takes 7 s to give up.
+	bool psn_skip_upnp;
 } CWSessionConfig;
 
 typedef struct {

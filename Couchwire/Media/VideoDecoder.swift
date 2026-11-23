@@ -338,8 +338,12 @@ final class FramePacer: @unchecked Sendable {
 		case .homeWired, .homeWireless: 0.05
 		}
 	}
-	/// Lateness remembered, in frames: about 5 s, so bursts a few seconds apart are still covered.
-	private static let memory = 300
+	/// Lateness remembered, in frames: about 5 s over the internet, so bursts a few seconds apart are
+	/// still covered, and 2 s at home, so a brief Wi-Fi blip is soon forgotten.
+	private let memory: Int
+	/// How much of the hold is kept each frame once lateness has passed. At home it lets go within a
+	/// few seconds; over the internet much more slowly.
+	private let decay: Double
 	/// Unevenness too small to see, which smoothing leaves alone.
 	static let tolerance: Double = 0.006
 
@@ -364,8 +368,10 @@ final class FramePacer: @unchecked Sendable {
 	private var lateness: [Double] = []
 	private var head = 0
 
-	init(fps: Int, maxHold: Double, mode: SmoothingMode) {
+	init(fps: Int, maxHold: Double, mode: SmoothingMode, home: Bool) {
 		self.maxHold = maxHold
+		memory = home ? 120 : 300
+		decay = home ? 0.993 : 0.999
 		_mode = mode
 		minInterval = 1 / Double(max(fps, 1))
 		interval = minInterval
@@ -387,7 +393,7 @@ final class FramePacer: @unchecked Sendable {
 			// A few ms early or late never shows: the frame still lands on the same display refresh.
 			// Only cover lateness beyond that, so a steady network gets no added delay.
 			late = max(0, gap - interval - Self.tolerance)
-			if lateness.count < Self.memory { lateness.append(late) } else { lateness[head] = late; head = (head + 1) % Self.memory }
+			if lateness.count < memory { lateness.append(late) } else { lateness[head] = late; head = (head + 1) % memory }
 		}
 		lastDecoded = decodedAt
 		if _mode == .off {
@@ -398,10 +404,12 @@ final class FramePacer: @unchecked Sendable {
 		if _mode == .steadiest {
 			// Hold for as long as the latest bad gap, so the next one like it is covered too. Shrinks
 			// slowly once the network calms down.
-			hold = late > hold ? min(late, maxHold) : hold * 0.9995
+			hold = late > hold ? min(late, maxHold) : hold * (decay + (1 - decay) / 2)
 		} else {
 			hold = balancedHold()
 		}
+		// Under a millisecond is nothing you'd see; drop it so the stats show none.
+		if hold < 0.001 { hold = 0 }
 		var show = max(decodedAt, min(lastShow + interval, decodedAt + hold))
 		// Never ask for two frames at once: keep at least half a frame between them.
 		if lastShow > 0 { show = max(show, lastShow + interval / 2) }
@@ -410,10 +418,10 @@ final class FramePacer: @unchecked Sendable {
 	}
 
 	private func balancedHold() -> Double {
-		// Cover all but the worst 3% of recent lateness. Grow at once, shrink slowly (about 6% a
-		// second), so a network that bursts every few seconds isn't caught out each time.
+		// Cover all but the worst 3% of recent lateness. Grow at once, shrink gently, so a network
+		// that bursts every few seconds isn't caught out each time.
 		let sorted = lateness.sorted()
 		let target = sorted.isEmpty ? 0 : min(sorted[Int(Double(sorted.count - 1) * 0.97)], maxHold)
-		return target > hold ? target : max(target, hold * 0.999)
+		return target > hold ? target : max(target, hold * decay)
 	}
 }

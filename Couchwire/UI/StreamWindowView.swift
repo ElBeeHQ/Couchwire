@@ -21,12 +21,35 @@ struct StreamWindowView: View {
 			.overlay {
 				if let session = model.session {
 					VideoLayerView(layer: session.displayLayer, stats: session.statsCollector)
-				} else {
+				} else if model.reconnecting == nil, model.reconnectError == nil {
 					Text("No active session").foregroundStyle(.secondary)
 				}
 			}
 			.overlay {
-				if let session = model.session { overlay(for: session) }
+				if let session = model.session {
+					overlay(for: session)
+				} else if let console = model.reconnecting {
+					StatusPanel {
+						ProgressView().controlSize(.large)
+						Text("Network changed. Reconnecting to \(console.nickname)…")
+							.multilineTextAlignment(.center)
+						Button("Cancel") {
+							model.endSession()
+							dismissWindow(id: "stream")
+						}
+						.keyboardShortcut(.cancelAction)
+					}
+				} else if let error = model.reconnectError {
+					StatusPanel {
+						Image(systemName: "exclamationmark.triangle").font(.system(size: 32))
+						Text(error).multilineTextAlignment(.center)
+						Button("Close") {
+							model.endSession()
+							dismissWindow(id: "stream")
+						}
+						.keyboardShortcut(.defaultAction)
+					}
+				}
 			}
 			.overlay(alignment: .topTrailing) {
 				if showStats, let session = model.session, session.phase == .streaming {

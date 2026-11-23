@@ -291,6 +291,7 @@ struct CWSession {
 	/// Internet play only. Owned by `session` once chiaki_session_init succeeds (it finalizes it).
 	ChiakiHolepunchSession holepunch;
 	uint8_t psn_duid[32];
+	bool psn_skip_upnp;
 };
 
 _Static_assert(CW_ERR_CANCELED == CHIAKI_ERR_CANCELED, "CW_ERR_CANCELED");
@@ -416,6 +417,7 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 			return NULL;
 		}
 		chiaki_holepunch_session_force_port_guessing(s->holepunch, config->psn_force_port_guessing);
+		s->psn_skip_upnp = config->psn_skip_upnp;
 		memcpy(s->psn_duid, config->psn_duid, sizeof(s->psn_duid));
 	}
 
@@ -499,7 +501,9 @@ int cw_session_psn_connect(CWSession *s)
 	// The order chiaki-ng uses (lib/include/chiaki/remote/holepunch.h). UPnP is a bonus: it's
 	// fine for it to fail.
 	psn_progress(s, CW_PSN_STEP_ROUTER);
-	chiaki_holepunch_upnp_discover(hp);
+	// Skipping it leaves the gateway "unknown", which libchiaki treats as "not found".
+	if(!s->psn_skip_upnp)
+		chiaki_holepunch_upnp_discover(hp);
 
 	psn_progress(s, CW_PSN_STEP_SESSION);
 	err = chiaki_holepunch_session_create(hp);

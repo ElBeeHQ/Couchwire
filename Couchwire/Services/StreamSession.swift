@@ -1,4 +1,5 @@
 import AVFoundation
+import QuartzCore
 import Foundation
 import Observation
 import os
@@ -17,6 +18,13 @@ final class StreamSession {
 	}
 
 	private(set) var phase: Phase = .connecting
+	/// Still connecting (or waiting for the PIN).
+	var isStarting: Bool {
+		switch phase {
+		case .connecting, .needsPIN: true
+		case .streaming, .ended: false
+		}
+	}
 	/// Internet play: how far the connection has got while `phase` is `.connecting`.
 	private(set) var internetStep: CWPSNStep?
 	/// Set for a session over the internet, nil for one on the home network.
@@ -28,6 +36,8 @@ final class StreamSession {
 		/// The console's 32-byte PSN device id.
 		let deviceID: Data
 		let forcePortGuessing: Bool
+		/// Don't look for a UPnP router: mobile hotspots never have one.
+		var skipRouterSearch = false
 	}
 	/// Refreshed twice a second while streaming, for the performance overlay.
 	private(set) var stats = StreamStats.Snapshot()
@@ -85,7 +95,8 @@ final class StreamSession {
 			try? timebase.setTime(CMClock.hostTimeClock.time)
 			try? timebase.setRate(1)
 			displayLayer.controlTimebase = timebase
-			pacer = FramePacer(fps: settings.fps, maxHold: FramePacer.maxHold(for: link), mode: smoothing.resolved(for: link))
+			pacer = FramePacer(fps: settings.fps, maxHold: FramePacer.maxHold(for: link), mode: smoothing.resolved(for: link),
+								 home: internet == nil)
 		} else {
 			pacer = nil
 		}
@@ -115,6 +126,7 @@ final class StreamSession {
 			cfg.psn_token = UnsafePointer(token)
 			withUnsafeMutableBytes(of: &cfg.psn_duid) { dst in internet.deviceID.prefix(32).copyBytes(to: dst.bindMemory(to: UInt8.self).baseAddress!, count: min(32, internet.deviceID.count)) }
 			cfg.psn_force_port_guessing = internet.forcePortGuessing
+			cfg.psn_skip_upnp = internet.skipRouterSearch
 		}
 		let host = strdup(console.lastAddress)
 		defer { free(host) }
@@ -227,6 +239,8 @@ final class StreamSession {
 			reason: "Remote Play streaming")
 		if internet != nil {
 			// Finding the console through PSN and opening a connection blocks for up to a minute.
+			startedAt = CACurrentMediaTime()
+			Self.timing.notice("Internet connect started")
 			internetStep = CW_PSN_STEP_ROUTER
 			connecting.enter()
 			DispatchQueue.global(qos: .userInitiated).async { [connecting] in
@@ -236,6 +250,7 @@ final class StreamSession {
 			}
 			return
 		}
+		startedAt = CACurrentMediaTime()
 		let err = cw_session_start(h)
 		if err != 0 {
 			phase = .ended(error: "Couldn’t start session: \(String(cString: cw_error_string(err)))")
@@ -243,11 +258,19 @@ final class StreamSession {
 	}
 
 	private func internetProgress(_ step: CWPSNStep) {
-		if phase == .connecting { internetStep = step }
+		guard phase == .connecting else { return }
+		internetStep = step
+		Self.timing.notice("Internet step \(step.rawValue, privacy: .public) after \(self.elapsed, privacy: .public) s")
 	}
+
+	/// Connection timings, kept by macOS's log so slow connections can be looked into later.
+	static let timing = Logger(subsystem: "Couchwire", category: "Timing")
+	@ObservationIgnored private var startedAt: CFTimeInterval = 0
+	private var elapsed: String { String(format: "%.1f", CACurrentMediaTime() - startedAt) }
 
 	private func internetConnectFinished(_ err: Int32) {
 		guard err != 0, phase == .connecting else { return }
+		Self.timing.notice("Internet connect failed with \(err, privacy: .public) after \(self.elapsed, privacy: .public) s")
 		let name = console.nickname
 		let message: String? = switch err {
 		case CW_ERR_CANCELED: nil
@@ -310,6 +333,7 @@ final class StreamSession {
 	}
 
 	private func didConnect() {
+		Self.timing.notice("Streaming after \(self.elapsed, privacy: .public) s (\(self.internet == nil ? "home" : "internet", privacy: .public))")
 		phase = .streaming
 		startStatsTimer()
 		// The live ping goes to the console's home address, which only answers on the home network.
@@ -336,6 +360,12 @@ final class StreamSession {
 	@ObservationIgnored var retryWhenNotReady: ((StreamSession) -> Bool)?
 
 	private func didQuit(reason: Int32, error: String?) {
+		Self.timing.notice("Quit with reason \(reason, privacy: .public) after \(self.elapsed, privacy: .public) s: \(error ?? "no error", privacy: .public)")
+		// The connection broke just after the Mac changed network: reconnect rather than show an error.
+		if phase == .streaming, error != nil, PathWatcher.shared.secondsSinceChange < 30, onConnectionLost != nil, !lostReported {
+			reportLost()
+			return
+		}
 		if phase == .connecting, Self.notReadyReasons.contains(reason), retryWhenNotReady?(self) == true {
 			teardown()
 			return
@@ -365,6 +395,13 @@ final class StreamSession {
 
 	private func refreshStats() {
 		guard let handle, phase == .streaming else { return }
+		// No video at all: the PS5 sends frames continuously, even for a still picture, so silence
+		// means the connection has gone. Quickly after a network change, more slowly otherwise.
+		let silent = statsCollector.secondsSinceLastFrame
+		if silent > (PathWatcher.shared.secondsSinceChange < 15 ? 1.5 : 6) {
+			reportLost()
+			return
+		}
 		var snapshot = statsCollector.snapshot()
 		var net = CWNetworkStats()
 		cw_session_get_stats(handle, &net)
@@ -386,6 +423,18 @@ final class StreamSession {
 			struggleReason = detector.reason
 			struggling = true
 		}
+	}
+
+	/// Called once when the stream has stopped arriving, typically because the Mac moved to another
+	/// network: the console keeps sending to the old address, and nothing can move a live stream over.
+	/// The session is still running; the handler ends it and connects again.
+	@ObservationIgnored var onConnectionLost: ((StreamSession) -> Void)?
+	@ObservationIgnored private var lostReported = false
+
+	private func reportLost() {
+		guard !lostReported, let onConnectionLost else { return }
+		lostReported = true
+		onConnectionLost(self)
 	}
 
 	/// Don't learn from this session when it ends: the caller already has.

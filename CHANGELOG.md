@@ -7,6 +7,7 @@
 - **Internet play.** Turn on **Settings › Internet Play** and sign in to PlayStation Network to play your PS5 away from home, with no port forwarding. Couchwire wakes the console through PSN and shows each step while it connects. Most VPNs block it, and Couchwire says so when one is on.
 - **Automatic quality.** Each stream starts at what the connection can handle (lower over the internet and on mobile hotspots), never above your own settings, and learns from every session. If a stream keeps struggling, Couchwire offers to restart it at lower quality.
 - **Smoothing** (**Settings › Video**) evens out frames that arrive unevenly. Automatic works hardest on mobile hotspots and adds no delay on a steady network; Off, Balanced and Steadiest are there too, and changes apply mid-stream.
+- **Reconnects by itself** when your Mac moves to another network mid-game: the frozen picture is replaced by "Reconnecting…" and the stream resumes at home or over the internet, whichever works from the new network.
 - **Frame rate** in the performance stats, and a frame-pacing graph showing when frames arrived and when they were shown.
 
 ### Fixed

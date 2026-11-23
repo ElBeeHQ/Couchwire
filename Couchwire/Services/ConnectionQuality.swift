@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import QuartzCore
 
 /// Automatic quality: picks the stream settings each session starts with from the kind of
 /// connection and how earlier sessions on it went, never above the settings the user chose.
@@ -54,11 +55,14 @@ enum ConnectionQuality {
 	}
 
 	/// The link this Mac is on right now. Home sessions are wired or Wi-Fi; internet sessions on a
-	/// metered connection (an iPhone hotspot, tethering) count as mobile.
+	/// metered or Low Data Mode connection (a phone hotspot, tethering) count as mobile.
 	static func currentLink(internet: Bool) -> Link {
 		let path = PathWatcher.shared.path
 		if internet {
-			let mobile = path.map { $0.isExpensive || $0.usesInterfaceType(.cellular) } ?? false
+			// macOS marks hotspots as expensive or, more often, Low Data Mode ("constrained"). iPhone
+			// hotspots also always hand out 172.20.10.x.
+			let mobile = path.map { $0.isExpensive || $0.isConstrained || $0.usesInterfaceType(.cellular) } ?? false
+				|| LocalNetwork.contains("172.20.10.1")
 			return mobile ? .internetMobile : .internet
 		}
 		let wired = path?.usesInterfaceType(.wiredEthernet) ?? false
@@ -115,16 +119,31 @@ final class PathWatcher: @unchecked Sendable {
 	private let monitor = NWPathMonitor()
 	private let lock = NSLock()
 	private var _path: NWPath?
+	private var signature = ""
+	private var changedAt: CFTimeInterval = 0
 
 	var path: NWPath? {
 		lock.lock(); defer { lock.unlock() }
 		return _path
 	}
 
+	/// Seconds since the Mac last moved to a different network (or lost or regained one).
+	var secondsSinceChange: Double {
+		lock.lock(); defer { lock.unlock() }
+		return changedAt > 0 ? CACurrentMediaTime() - changedAt : .infinity
+	}
+
 	private init() {
 		monitor.pathUpdateHandler = { [weak self] p in
 			guard let self else { return }
-			lock.lock(); _path = p; lock.unlock()
+			// Moving between Wi-Fi networks keeps the same interface (en0), so compare the
+			// gateways too: they change with the network.
+			let sig = "\(p.status) \(p.availableInterfaces.map(\.name)) \(p.gateways.map(\.debugDescription))"
+			lock.lock()
+			if _path != nil, sig != signature { changedAt = CACurrentMediaTime() }
+			_path = p
+			signature = sig
+			lock.unlock()
 		}
 		monitor.start(queue: DispatchQueue(label: "Couchwire.path"))
 	}

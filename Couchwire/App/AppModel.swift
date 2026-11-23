@@ -54,6 +54,12 @@ final class AppModel {
 	/// Shows the first-run setup over the console list.
 	var showingOnboarding = false
 	private(set) var waking: Set<String> = []
+	/// Set while reconnecting after the stream was lost (the Mac changed network). The stream
+	/// window shows it in place of the frozen picture.
+	private(set) var reconnecting: RegisteredConsole?
+	/// Why reconnecting gave up, shown in the stream window.
+	private(set) var reconnectError: String?
+	@ObservationIgnored private var reconnectTask: Task<Void, Never>?
 	var lastError: String?
 
 	@ObservationIgnored private var discovery: DiscoveryService?
@@ -224,7 +230,11 @@ final class AppModel {
 		}
 
 		let profile = profile(for: console.hostID)
-		if internetPlay, psnSignedIn, discoveredState(of: console) == nil {
+		// Over the internet when the console can't be seen here. A console still listed from the network
+		// the Mac has just left doesn't count: its address isn't on this one.
+		let current = registered.first { $0.hostID == console.hostID } ?? console
+		if internetPlay, psnSignedIn,
+		   discoveredState(of: console) == nil || !LocalNetwork.contains(current.lastAddress) {
 			return await connectOverInternet(console, keys: keys, ceiling: profile.customStream ?? settings)
 		}
 		if discoveredState(of: console)?.state == .standby {
@@ -270,7 +280,9 @@ final class AppModel {
 		let link = ConnectionQuality.currentLink(internet: true)
 		let s = StreamSession(console: current, keys: keys, settings: streamSettings(link, ceiling: ceiling), link: link,
 							  automaticQuality: autoQuality, smoothing: smoothing,
-							  internet: .init(accessToken: token, deviceID: deviceID, forcePortGuessing: forcePortGuessing))
+							  internet: .init(accessToken: token, deviceID: deviceID, forcePortGuessing: forcePortGuessing,
+											  skipRouterSearch: link == .internetMobile))
+		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
 		session = s
 		s.start()
 		return s
@@ -283,6 +295,7 @@ final class AppModel {
 		let link = ConnectionQuality.currentLink(internet: false)
 		let s = StreamSession(console: current, keys: keys, settings: streamSettings(link, ceiling: ceiling), link: link,
 							  automaticQuality: autoQuality, smoothing: smoothing)
+		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
 		s.retryWhenNotReady = { [weak self] failed in
 			guard let self, retries > 0, self.session === failed else { return false }
 			Task { @MainActor in
@@ -356,8 +369,88 @@ final class AppModel {
 	}
 
 	func endSession() {
+		reconnectTask?.cancel()
+		reconnectTask = nil
+		reconnecting = nil
+		reconnectError = nil
 		session?.stop()
 		session = nil
+	}
+
+	/// The stream stopped arriving, usually because the Mac moved to another network. End it, wait
+	/// for the new network, then connect again the best way from there: at home if the console can
+	/// be found, otherwise over the internet.
+	private func streamLost(_ lost: StreamSession) {
+		guard session === lost, reconnecting == nil else { lost.stop(); return }
+		let console = lost.console
+		reconnecting = console
+		reconnectError = nil
+		StreamSession.timing.notice("Stream lost; reconnecting")
+		// A network switch says nothing about the connection's quality.
+		lost.skipLearning()
+		lost.stop()
+		session = nil
+		reconnectTask = Task { [weak self] in
+			await self?.reconnect(console)
+		}
+	}
+
+	private func reconnect(_ console: RegisteredConsole) async {
+		// Wait up to 30 s for the Mac to be on a network again.
+		for _ in 0..<60 where PathWatcher.shared.path?.status != .satisfied {
+			try? await Task.sleep(for: .milliseconds(500))
+			if Task.isCancelled { return }
+		}
+		StreamSession.timing.notice("Network ready")
+		// Keep trying for up to 2 minutes. The console holds on to the lost stream for a while (it never
+		// heard it end) and ignores new requests until it lets go, so an unanswered request is
+		// abandoned after 12 s and made again, rather than waiting out libchiaki's 30 s.
+		let deadline = ContinuousClock.now + .seconds(120)
+		var attempt = 0
+		while ContinuousClock.now < deadline {
+			// On a different network from the console: go over the internet straight away. Otherwise
+			// give discovery a moment to find it here (it forgets a console 3 s after it stops
+			// answering), so a home connection is used when there is one.
+			let current = registered.first { $0.hostID == console.hostID } ?? console
+			let away = internetPlay && psnSignedIn && !LocalNetwork.contains(current.lastAddress)
+			try? await Task.sleep(for: .seconds(attempt == 0 ? (away ? 0.5 : 4) : (away ? 1 : 5)))
+			attempt += 1
+			if Task.isCancelled { return }
+			lastError = nil
+			guard await connect(console) != nil else {
+				// Not even started (no sign-in, console not found on PSN): trying again won't help.
+				if !away { continue }
+				break
+			}
+			// Wait for this attempt to stream or fail (over the internet that can take a minute). Follow
+			// `session` rather than the first one: a console that isn't ready yet gets fresh sessions.
+			var waitingSince: ContinuousClock.Instant?
+			while let s = session, s.isStarting {
+				try? await Task.sleep(for: .milliseconds(500))
+				if Task.isCancelled { return }
+				if s.internetStep == CW_PSN_STEP_CONSOLE {
+					let since = waitingSince ?? ContinuousClock.now
+					waitingSince = since
+					if ContinuousClock.now - since > .seconds(12) {
+						StreamSession.timing.notice("Console didn’t answer in 12 s; asking again")
+						break
+					}
+				} else {
+					waitingSince = nil
+				}
+			}
+			if session?.phase == .streaming {
+				reconnecting = nil
+				return
+			}
+			session?.stop()
+			session = nil
+		}
+		if Task.isCancelled { return }
+		reconnecting = nil
+		reconnectError = lastError ?? "Couldn’t reconnect to \(console.nickname) on this network."
+			+ (internetPlay ? "" : " To play away from home, turn on Internet Play in Settings.")
+		lastError = nil
 	}
 }
 
