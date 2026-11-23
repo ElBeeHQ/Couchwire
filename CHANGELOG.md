@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.2.2: Smoother on mobile data, sharper at home
+
+*23 November 2026*
+
+Automatic smoothing adds far less delay on a mobile hotspot, automatic quality gets back to full quality faster and can reach 50 Mbps at home, and Couchwire no longer quits while connecting over the internet.
 
 ### Added
 
@@ -14,6 +18,8 @@
 - **Automatic quality can reach 50 Mbps at home.** After a smooth session at 30 Mbps on your home network, wired or Wi-Fi, it moves up to 50 Mbps, if your own settings allow it. Over the internet it stays at 30 Mbps at most.
 - A tidier **About Couchwire** window.
 - While connecting over the internet, Couchwire keeps libchiaki's detailed connection log, so slow or failed connections can be looked into. It asks a busy PS5 again after 8 seconds instead of 12.
+- The system log now records whether a stream is HDR at each step (what the PS5 sends, the decoded frames and the display's HDR headroom), and each change automatic quality makes.
+- The PS button tip and setup use a controller symbol instead of the PlayStation logo.
 
 ### Fixed
 
