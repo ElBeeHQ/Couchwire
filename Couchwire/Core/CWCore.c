@@ -800,8 +800,12 @@ static void shield_step(CWSession *s, Shield *sh, uint64_t received, uint64_t lo
 	}
 	// A Wi-Fi scan stalls the stream for up to 10-odd seconds; lowering the bitrate doesn't help
 	// with that, and the console takes ages to climb back. So only pass loss on once it has lasted
-	// over 10 s and is still steady (3 of the last 10 reports), as real congestion does.
-	if(!passing && count >= 3 && sh->last_loss_ms && now - sh->episode_ms > 10000)
+	// over 10 s and is still steady (3 of the last 10 reports), as real congestion does. Light loss
+	// that never gets that steady is passed on once its run has lasted over 30 s: a scan doesn't
+	// last that long, and the console should still ease off for congestion that never goes away.
+	bool run_alive = sh->last_loss_ms && now - sh->last_loss_ms <= 3000;
+	uint64_t run_ms = run_alive ? now - sh->episode_ms : 0;
+	if(!passing && run_alive && ((count >= 3 && run_ms > 10000) || run_ms > 30000))
 		passing = true;
 	else if(passing && now - sh->last_loss_ms > 5000)
 		passing = false;

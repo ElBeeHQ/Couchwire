@@ -242,8 +242,8 @@ void cw_session_get_stats(CWSession *session, CWNetworkStats *out);
 void cw_session_watch_console_bitrate(CWSession *session);
 /// Blip shield: hide passing loss (a Wi-Fi scan, say) from the console, which cuts its bitrate hard
 /// on any loss and takes about half an hour to climb back. Once loss has lasted over 10 s (gaps under 3 s count as
-/// one run) and is still steady (3 of the last 10 reports), it's passed on as usual, up to `cap`,
-/// until there's been none for 5 s. Main thread, once a stream runs.
+/// one run) and is still steady (3 of the last 10 reports), or has lasted over 30 s however light, it's
+/// passed on as usual, up to `cap`, until there's been none for 5 s. Main thread, once a stream runs.
 void cw_session_set_blip_shield(CWSession *session, double cap);
 
 // MARK: - PSN

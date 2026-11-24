@@ -72,14 +72,16 @@ final class StreamSession {
 	}
 	/// The user closed the struggling banner without changing anything.
 	var strugglingDismissed = false
-	/// The PS5 is sending well below the bitrate asked for, though the connection has recovered. It
-	/// climbs back only about 1.3 Mbps a minute, while a fresh stream starts at full: the Sharpen banner.
+	/// The PS5 is sending well below what it started this stream at, though the connection has recovered.
+	/// It climbs back only about 1.3 Mbps a minute, while a fresh stream starts at full: the Sharpen banner.
 	private(set) var pictureSoft = false
 	/// The user closed the Sharpen banner; it comes back only after the bitrate recovers and drops again.
 	var softDismissed = false
 	@ObservationIgnored private var softLowTicks = 0
 	@ObservationIgnored private var softCleanTicks = 0
 	@ObservationIgnored private var softLastLost = 0
+	/// The highest target the PS5 has reported in this stream: what a fresh stream gets.
+	@ObservationIgnored private var softFull = 0.0
 	@ObservationIgnored private var detector = StruggleDetector()
 	/// The blip shield is running for this stream (at home, unless switched off).
 	@ObservationIgnored private var shieldOn = false
@@ -494,28 +496,32 @@ final class StreamSession {
 		}
 	}
 
-	/// Whether the picture is softer than it needs to be: the PS5's target under 60% of the bitrate
-	/// asked for for 30 s, with the last 20 s clean. Clears once the target is back over 80%, or the
-	/// stream starts struggling again. Needs the PS5's target, which is read at home.
+	/// Whether the picture is softer than it needs to be: the PS5's target under 60% of its highest in this
+	/// stream (what a fresh stream starts at) for 30 s, with the last 20 s clean. Clears once the target is
+	/// back over 80%, or the stream starts struggling again. Judged against the PS5's own start rather than
+	/// the bitrate asked for, in case it caps some settings lower: then a restart wouldn't help. Needs the
+	/// PS5's target, which is read at home.
 	private func watchSharpness(_ s: StreamStats.Snapshot) {
 		let lost = s.framesLost - softLastLost
 		softLastLost = s.framesLost
 		let target = Double(lastNet.console_target_bitrate)
 		guard shieldOn, target > 0 else { return }
 		let asked = Double(settings.bitrate) * 1000
+		softFull = max(softFull, min(target, asked))
+		let full = softFull
 		let clean = lost == 0 && s.lateFrameRatio <= 0.1 && !struggling
 		softCleanTicks = clean ? softCleanTicks + 1 : 0
-		softLowTicks = target < asked * 0.6 ? softLowTicks + 1 : 0
+		softLowTicks = target < full * 0.6 ? softLowTicks + 1 : 0
 		let soft: Bool
-		if target >= asked * 0.8 || struggling {
+		if target >= full * 0.8 || struggling {
 			soft = false
-			if target >= asked * 0.8 { softDismissed = false }
+			if target >= full * 0.8 { softDismissed = false }
 		} else {
 			soft = pictureSoft || (softLowTicks >= 60 && softCleanTicks >= 40)
 		}
 		if soft != pictureSoft {
 			pictureSoft = soft
-			Self.timing.notice("Picture \(soft ? "softer than it needs to be" : "sharp again", privacy: .public) after \(self.elapsed, privacy: .public) s (PS5 target \(target / 1_000_000, format: .fixed(precision: 1)) of \(asked / 1_000_000, format: .fixed(precision: 0)) Mbps)")
+			Self.timing.notice("Picture \(soft ? "softer than it needs to be" : "sharp again", privacy: .public) after \(self.elapsed, privacy: .public) s (PS5 target \(target / 1_000_000, format: .fixed(precision: 1)) of \(full / 1_000_000, format: .fixed(precision: 1)) Mbps highest, \(asked / 1_000_000, format: .fixed(precision: 0)) asked)")
 		}
 	}
 
