@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.5: A sharper picture after Wi-Fi hiccups
+
+*24 November 2026*
+
+At home, a short Wi-Fi stall no longer leaves the picture soft for the rest of the session, and if the picture does go soft after a longer bad patch, Couchwire offers to sharpen it again.
+
+### Added
+
+- **A sharp picture through short Wi-Fi stalls.** When it hears about lost video, your PS5 lowers the picture quality hard and then takes up to half an hour to raise it again. A few seconds of trouble, such as macOS scanning for Wi-Fi networks when you open the Wi-Fi menu, could leave the picture soft for a long time. At home, Couchwire now keeps short stalls to itself. If the trouble lasts, it tells the PS5 as before, so the PS5 can still ease off when the network is really busy.
+- **Sharpen.** If the picture is still soft after the connection has recovered, a banner offers to restart the stream. A fresh stream starts at full quality, and the restart takes a few seconds. At home only.
+- **An AirDrop tip.** On Wi-Fi, when AirDrop is on, the struggling banner says that turning AirDrop off in Control Centre can help. AirDrop makes the Mac's Wi-Fi leave your network for moments at a time.
+
 ## v0.2.4: Rumble that feels right, and quicker reconnects
 
 *23 November 2026*
