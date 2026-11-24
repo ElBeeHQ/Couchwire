@@ -35,9 +35,7 @@ struct StreamWindowView: View {
 				} else if let console = model.reconnecting {
 					StatusPanel {
 						ProgressView().controlSize(.large)
-						Text(model.reconnectReason == .lowerQuality
-							 ? "Restarting \(console.nickname) at lower quality…"
-							 : "Network changed. Reconnecting to \(console.nickname)…")
+						Text(restartText(console.nickname))
 							.multilineTextAlignment(.center)
 						Button("Cancel") {
 							model.endSession()
@@ -74,6 +72,13 @@ struct StreamWindowView: View {
 						dismiss: { session.strugglingDismissed = true })
 					.padding(24)
 					.transition(.move(edge: .bottom).combined(with: .opacity))
+				} else if let session = model.session, session.phase == .streaming, session.pictureSoft,
+						  !session.softDismissed {
+					SharpenBanner(
+						sharpen: { model.restartForSharperPicture() },
+						dismiss: { session.softDismissed = true })
+					.padding(24)
+					.transition(.move(edge: .bottom).combined(with: .opacity))
 				} else if let session = model.session, session.phase == .streaming, !psButtonTipSeen {
 					PSButtonTip(done: { withAnimation { psButtonTipSeen = true } })
 						.padding(24)
@@ -94,6 +99,15 @@ struct StreamWindowView: View {
 			if model.profile(for: s.console.hostID).autoFullScreen, !window.isFullScreen {
 				window.toggleFullScreen()
 			}
+		}
+	}
+
+	/// What the window says while restarting or reconnecting.
+	private func restartText(_ name: String, internet: Bool = false) -> String {
+		switch model.reconnectReason {
+		case .lowerQuality: internet ? "Restarting \(name) at lower quality over the internet" : "Restarting \(name) at lower quality…"
+		case .sharpen: internet ? "Restarting \(name) for a sharper picture over the internet" : "Restarting \(name) for a sharper picture…"
+		case .networkChanged: internet ? "Network changed. Reconnecting to \(name) over the internet" : "Network changed. Reconnecting to \(name)…"
 		}
 	}
 
@@ -161,7 +175,7 @@ struct StreamWindowView: View {
 				let reconnecting = model.reconnecting != nil
 				if session.internet != nil {
 					Text(reconnecting
-						 ? (model.reconnectReason == .lowerQuality ? "Restarting \(session.console.nickname) at lower quality over the internet" : "Network changed. Reconnecting to \(session.console.nickname) over the internet")
+						 ? restartText(session.console.nickname, internet: true)
 						 : "Connecting to \(session.console.nickname) over the internet")
 						.multilineTextAlignment(.center)
 					Text(internetStepText(session.internetStep, reconnecting: reconnecting, attempt: model.reconnectAttempt))
@@ -175,7 +189,7 @@ struct StreamWindowView: View {
 					.keyboardShortcut(.cancelAction)
 				} else {
 					Text(reconnecting
-						 ? (model.reconnectReason == .lowerQuality ? "Restarting \(session.console.nickname) at lower quality…" : "Network changed. Reconnecting to \(session.console.nickname)…")
+						 ? restartText(session.console.nickname)
 						 : "Connecting to \(session.console.nickname)…")
 					if session.waitingForRelease {
 						Text("Waiting for your PS5 to let go of the last stream…")
@@ -256,6 +270,39 @@ private struct StrugglingBanner: View {
 			}
 			.buttonStyle(.borderless)
 			.help("Keep this quality")
+		}
+		.padding(16)
+		.frame(maxWidth: 560)
+		.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+		.environment(\.colorScheme, .dark)
+	}
+}
+
+/// The PS5 lowered its bitrate during a bad patch and is climbing back only slowly. A fresh stream
+/// starts at full, so offer one.
+private struct SharpenBanner: View {
+	let sharpen: () -> Void
+	let dismiss: () -> Void
+
+	var body: some View {
+		HStack(spacing: 14) {
+			Image(systemName: "sparkles")
+				.font(.title2)
+				.foregroundStyle(.yellow)
+			VStack(alignment: .leading, spacing: 2) {
+				Text("The picture is softer than it needs to be").font(.headline)
+				Text("Your connection has recovered, but your PS5 is slow to raise the quality again. Restart the stream for a sharp picture. It takes a few seconds.")
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+			Button("Sharpen", action: sharpen)
+				.buttonStyle(.borderedProminent)
+			Button(action: dismiss) {
+				Image(systemName: "xmark")
+			}
+			.buttonStyle(.borderless)
+			.help("Keep streaming as it is")
 		}
 		.padding(16)
 		.frame(maxWidth: 560)

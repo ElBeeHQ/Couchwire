@@ -59,7 +59,7 @@ final class AppModel {
 	private(set) var reconnecting: RegisteredConsole?
 	/// Why, for the stream window's wording.
 	private(set) var reconnectReason = ReconnectReason.networkChanged
-	enum ReconnectReason { case networkChanged, lowerQuality }
+	enum ReconnectReason { case networkChanged, lowerQuality, sharpen }
 	/// Which try this is while reconnecting (1 for the first), for the stream window.
 	private(set) var reconnectAttempt = 0
 	/// Why reconnecting gave up, shown in the stream window.
@@ -441,6 +441,25 @@ final class AppModel {
 		}
 	}
 
+	/// The picture is softer than it needs to be: restart the stream at the same quality, since a
+	/// fresh stream starts at full bitrate and the PS5 climbs back only slowly within one.
+	func restartForSharperPicture() {
+		guard let s = session else { return }
+		let console = s.console
+		// Don't learn from this stream: it struggled earlier, so it would step the quality down,
+		// and the restart is meant to get the full quality back.
+		s.skipLearning()
+		endSession()
+		reconnecting = console
+		reconnectReason = .sharpen
+		reconnectError = nil
+		StreamSession.timing.notice("Restarting for a sharper picture")
+		reconnectTask = Task { [weak self] in
+			try? await Task.sleep(for: .seconds(2))
+			await self?.reconnect(console)
+		}
+	}
+
 	func endSession() {
 		reconnectTask?.cancel()
 		reconnectTask = nil
@@ -551,7 +570,7 @@ final class AppModel {
 		}
 		if Task.isCancelled { return }
 		reconnecting = nil
-		reconnectError = lastError ?? (reconnectReason == .lowerQuality
+		reconnectError = lastError ?? (reconnectReason != .networkChanged
 			? "Couldn’t restart the stream from \(console.nickname). Wait a minute, then press Play again."
 			: "Couldn’t reconnect to \(console.nickname) on this network.")
 			+ (internetPlay ? "" : " To play away from home, turn on Internet Play in Settings.")
