@@ -60,9 +60,25 @@ final class StreamSession {
 	private(set) var struggling = false
 	/// Why, once `struggling`.
 	private(set) var struggleReason: StruggleDetector.Reason = .late
+	/// Once `struggling` on Wi-Fi: AirDrop is on, which can cause it.
+	private(set) var airDropMayCause = false
+
+	/// Whether AirDrop is set to Contacts Only or Everyone. While it's on, the Wi-Fi radio keeps
+	/// leaving the home network for a moment, so frames arrive late or get lost. Apple doesn't
+	/// document this setting; if it moves, this reads false and the tip just doesn't show.
+	private static var airDropOn: Bool {
+		guard let mode = UserDefaults(suiteName: "com.apple.sharingd")?.string(forKey: "DiscoverableMode") else { return false }
+		return mode != "Off"
+	}
 	/// The user closed the struggling banner without changing anything.
 	var strugglingDismissed = false
 	@ObservationIgnored private var detector = StruggleDetector()
+	/// The blip shield is running for this stream (at home, unless switched off).
+	@ObservationIgnored private var shieldOn = false
+	@ObservationIgnored private var shieldHidden: UInt32 = 0
+	@ObservationIgnored private var shieldPassing = false
+	/// libchiaki's latest network stats, for the shield's log lines.
+	@ObservationIgnored private var lastNet = CWNetworkStats()
 	@ObservationIgnored private var learned = false
 	/// Running totals of lost frames and audio gaps over the last 30 s.
 	@ObservationIgnored private var recentCounts: [(frames: Int, gaps: Int)] = []
@@ -355,6 +371,12 @@ final class StreamSession {
 		// Just after a network change (a reconnect, usually) the Wi-Fi is still settling: give it longer
 		// before judging the stream, so the banner and automatic quality aren't misled.
 		detector = StruggleDetector(afterNetworkChange: PathWatcher.shared.secondsSinceChange < 60)
+		if BlipShield.isOn, isHome, let handle {
+			cw_session_set_blip_shield(handle, BlipShield.cap)
+			cw_session_watch_console_bitrate(handle)
+			shieldOn = true
+			Self.timing.notice("Blip shield on")
+		}
 		startStatsTimer()
 		// The live ping goes to the console's home address, which only answers on the home network.
 		if isHome {
@@ -439,6 +461,7 @@ final class StreamSession {
 		cw_session_get_stats(handle, &net)
 		snapshot.rttMs = net.rtt_ms
 		snapshot.packetLoss = net.packet_loss
+		lastNet = net
 		if let audio = media.audio.status {
 			snapshot.audioBufferMs = audio.targetMs
 			snapshot.audioGaps = audio.gaps
@@ -451,12 +474,28 @@ final class StreamSession {
 		}
 		stats = snapshot
 		detector.add(snapshot)
+		watchShield()
 		logStats(snapshot)
 		// The banner follows how the stream is doing now; learning uses whether it ever struggled.
 		if detector.strugglingNow != struggling {
 			struggleReason = detector.reason
+			if detector.strugglingNow { airDropMayCause = link != .homeWired && Self.airDropOn }
 			struggling = detector.strugglingNow
-			Self.timing.notice("\(self.struggling ? "Struggling" : "No longer struggling", privacy: .public) after \(self.elapsed, privacy: .public) s")
+			Self.timing.notice("\(self.struggling ? "Struggling" : "No longer struggling", privacy: .public) after \(self.elapsed, privacy: .public) s\(self.struggling ? " (AirDrop \(self.airDropMayCause ? "on" : "off or wired"))" : "", privacy: .public)")
+		}
+	}
+
+	/// Logs what the blip shield did since the last tick, with the PS5's target to see the effect.
+	private func watchShield() {
+		guard shieldOn else { return }
+		let net = lastNet
+		if net.shield_hidden != shieldHidden {
+			Self.timing.notice("Shield: hid \(net.shield_hidden - self.shieldHidden, privacy: .public) report(s) with loss (last \(net.shield_last_hidden * 100, format: .fixed(precision: 1)) %, \(net.shield_hidden, privacy: .public) so far) after \(self.elapsed, privacy: .public) s, PS5 target \(Double(net.console_target_bitrate) / 1_000_000, format: .fixed(precision: 1)) Mbps")
+			shieldHidden = net.shield_hidden
+		}
+		if net.shield_passing != shieldPassing {
+			shieldPassing = net.shield_passing
+			Self.timing.notice("Shield: \(self.shieldPassing ? "loss is lasting, passing it on" : "hiding stalls again", privacy: .public) after \(self.elapsed, privacy: .public) s, PS5 target \(Double(net.console_target_bitrate) / 1_000_000, format: .fixed(precision: 1)) Mbps")
 		}
 	}
 
@@ -488,7 +527,9 @@ final class StreamSession {
 			s.pingJitterMs, s.packetLoss * 100, s.lateFrameRatio * 100, s.framesLost, s.recentFramesLost,
 			s.audioBufferMs, s.audioGaps, s.recentAudioGaps, s.fps, s.bitrateMbps, s.codec, s.dynamicRange.isEmpty ? "?" : s.dynamicRange)
 		let smoothingNote = pacer.map { $0.mode == .automatic ? ($0.steppedUp ? "automatic, steadiest" : "automatic, balanced") : $0.mode.rawValue } ?? "none"
-		Self.timing.notice("Stats \(line, privacy: .public), smoothing \(smoothingNote, privacy: .public)")
+		let shieldNote = shieldOn ? String(format: ", shield %@ (%u hidden, PS5 target %.1f Mbps)",
+			lastNet.shield_passing ? "passing" : "hiding", lastNet.shield_hidden, Double(lastNet.console_target_bitrate) / 1_000_000) : ""
+		Self.timing.notice("Stats \(line, privacy: .public), smoothing \(smoothingNote, privacy: .public)\(shieldNote, privacy: .public)")
 	}
 
 	/// How the stream went, for automatic quality to learn from. Nil if it was too short to tell.

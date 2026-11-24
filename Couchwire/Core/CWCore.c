@@ -10,6 +10,9 @@
 #include <chiaki/remote/holepunch.h>
 
 #include <arpa/inet.h>
+#include <time.h>
+#include <pthread.h>
+#include <unistd.h>
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <netinet/in.h>
@@ -44,6 +47,8 @@ static void log_forward(ChiakiLogLevel level, const char *msg, void *user)
 	if(fwd && fwd->cb)
 		fwd->cb((int)level, msg, fwd->user);
 }
+
+static void session_log_forward(ChiakiLogLevel level, const char *msg, void *user);
 
 int cw_init(void)
 {
@@ -301,6 +306,16 @@ struct CWSession {
 	bool have_triggers;
 	uint8_t trigger_type_left, trigger_type_right;
 	uint8_t trigger_left[10], trigger_right[10];
+	/// The console's target bitrate from its connection-quality messages (0 = not heard yet).
+	_Atomic int console_target_bitrate;
+	/// Blip shield (see cw_session_set_blip_shield). The cap is 0 when it's off.
+	pthread_t shield_thread;
+	bool shield_running;
+	atomic_bool shield_stop;
+	_Atomic double shield_cap;
+	atomic_uint shield_hidden;
+	_Atomic double shield_last_hidden;
+	atomic_bool shield_passing;
 };
 
 /// DualSense trigger-force reduction (high nibble of the output report's motor power byte),
@@ -475,7 +490,7 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 	atomic_store(&trigger_reduction, 0);
 	s->log_fwd.cb = callbacks.log;
 	s->log_fwd.user = callbacks.user;
-	chiaki_log_init(&s->log, CW_LOG_MASK, log_forward, &s->log_fwd);
+	chiaki_log_init(&s->log, CW_LOG_MASK, session_log_forward, s);
 
 	bool internet = config->psn_token != NULL;
 	// Over the internet the address comes from the connection PSN sets up, not from us.
@@ -627,10 +642,14 @@ int cw_session_stop(CWSession *s)
 	return (int)chiaki_session_stop(&s->session);
 }
 
+static void shield_thread_stop(CWSession *s);
+
 void cw_session_free(CWSession *s)
 {
 	if(!s)
 		return;
+	// Before the session goes: the shield thread uses its packet stats.
+	shield_thread_stop(s);
 	if(s->started)
 	{
 		chiaki_session_stop(&s->session);
@@ -720,8 +739,137 @@ void cw_session_get_stats(CWSession *s, CWNetworkStats *out)
 	out->rtt_ms = (double)cs->rtt_us / 1000.0;
 	out->mtu_in = cs->mtu_in;
 	ChiakiStreamConnection *sc = &cs->stream_connection;
+	// As measured, before the cap (and the blip shield) limit what the console is told.
 	out->packet_loss = sc->congestion_control.packet_loss;
 	out->measured_bitrate_mbps = sc->measured_bitrate;
+	out->console_target_bitrate = atomic_load(&s->console_target_bitrate);
+	out->shield_hidden = atomic_load(&s->shield_hidden);
+	out->shield_last_hidden = atomic_load(&s->shield_last_hidden);
+	out->shield_passing = atomic_load(&s->shield_passing);
+}
+
+// MARK: - Blip shield
+
+/// What the shield thread knows about the reports libchiaki sends every 200 ms.
+typedef struct {
+	bool lossy[10];  // the last 10 reports (2 s): whether each had loss
+	int next;
+	uint64_t last_received, last_lost;
+	uint64_t last_loss_ms;   // when loss was last seen
+	uint64_t episode_ms;     // when the current run of loss began (gaps under 3 s count as one)
+} Shield;
+
+static uint64_t now_ms(void)
+{
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+}
+
+/// On each look at the counts libchiaki is building its next report from, sets the most loss
+/// that report may carry: none while loss is a passing stall, the cap once it has lasted.
+static void shield_step(CWSession *s, Shield *sh, uint64_t received, uint64_t lost, bool new_report)
+{
+	double cap = atomic_load(&s->shield_cap);
+	ChiakiCongestionControl *cc = &s->session.stream_connection.congestion_control;
+	if(new_report)
+	{
+		// The counts were reset, so the previous report has gone, with what we last saw in it.
+		bool had_loss = sh->last_lost > 0;
+		if(had_loss && !atomic_load(&s->shield_passing))
+		{
+			atomic_fetch_add(&s->shield_hidden, 1);
+			uint64_t total = sh->last_received + sh->last_lost;
+			atomic_store(&s->shield_last_hidden, total ? (double)sh->last_lost / total : 0);
+		}
+		sh->lossy[sh->next] = had_loss;
+		sh->next = (sh->next + 1) % 10;
+	}
+	sh->last_received = received;
+	sh->last_lost = lost;
+	int count = lost > 0 ? 1 : 0;
+	for(int i = 0; i < 10; i++)
+		count += sh->lossy[i] ? 1 : 0;
+	uint64_t now = now_ms();
+	bool passing = atomic_load(&s->shield_passing);
+	if(lost > 0)
+	{
+		if(!sh->last_loss_ms || now - sh->last_loss_ms > 3000)
+			sh->episode_ms = now;
+		sh->last_loss_ms = now;
+	}
+	// A Wi-Fi scan stalls the stream for up to 10-odd seconds; lowering the bitrate doesn't help
+	// with that, and the console takes ages to climb back. So only pass loss on once it has lasted
+	// over 10 s and is still steady (3 of the last 10 reports), as real congestion does.
+	if(!passing && count >= 3 && sh->last_loss_ms && now - sh->episode_ms > 10000)
+		passing = true;
+	else if(passing && now - sh->last_loss_ms > 5000)
+		passing = false;
+	atomic_store(&s->shield_passing, passing);
+	// Aligned double, read by libchiaki's congestion thread each report; a plain write is fine.
+	cc->packet_loss_max = passing ? cap : 0;
+}
+
+/// Every 50 ms, peeks at the counts for libchiaki's next congestion report.
+static void *shield_thread_func(void *user)
+{
+	CWSession *s = user;
+	ChiakiPacketStats *stats = &s->session.stream_connection.packet_stats;
+	uint64_t last_received = 0;
+	Shield shield = { 0 };
+	while(!atomic_load(&s->shield_stop))
+	{
+		usleep(50 * 1000);
+		uint64_t received, lost;
+		chiaki_packet_stats_get(stats, false, &received, &lost);
+		// libchiaki resets the counts each time it sends a report.
+		bool new_report = received < last_received;
+		last_received = received;
+		shield_step(s, &shield, received, lost, new_report);
+	}
+	return NULL;
+}
+
+static void shield_thread_stop(CWSession *s)
+{
+	if(!s->shield_running)
+		return;
+	atomic_store(&s->shield_stop, true);
+	pthread_join(s->shield_thread, NULL);
+	s->shield_running = false;
+}
+
+void cw_session_set_blip_shield(CWSession *s, double cap)
+{
+	if(!s || cap <= 0 || s->shield_running)
+		return;
+	atomic_store(&s->shield_cap, cap);
+	atomic_store(&s->shield_stop, false);
+	if(pthread_create(&s->shield_thread, NULL, shield_thread_func, s) == 0)
+		s->shield_running = true;
+}
+
+/// The session's log. Verbose messages are only switched on to read the console's target
+/// bitrate; they're never passed on.
+static void session_log_forward(ChiakiLogLevel level, const char *msg, void *user)
+{
+	CWSession *s = user;
+	if(level == CHIAKI_LOG_VERBOSE)
+	{
+		static const char prefix[] = "StreamConnection received connection quality: target_bitrate=";
+		if(strncmp(msg, prefix, sizeof(prefix) - 1) == 0)
+			atomic_store(&s->console_target_bitrate, atoi(msg + sizeof(prefix) - 1));
+		return;
+	}
+	log_forward(level, msg, &s->log_fwd);
+}
+
+void cw_session_watch_console_bitrate(CWSession *s)
+{
+	if(!s)
+		return;
+	// libchiaki's threads read the mask without a lock; an int write is fine for that.
+	s->log.level_mask |= CHIAKI_LOG_VERBOSE;
 }
 
 CWControllerState cw_controller_idle(void)

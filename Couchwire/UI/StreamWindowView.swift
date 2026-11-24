@@ -69,6 +69,7 @@ struct StreamWindowView: View {
 				   !session.strugglingDismissed, model.canLowerQuality(session) {
 					StrugglingBanner(
 						reason: session.struggleReason,
+						airDrop: session.airDropMayCause,
 						lower: { model.reconnectAtLowerQuality() },
 						dismiss: { session.strugglingDismissed = true })
 					.padding(24)
@@ -229,6 +230,8 @@ private func internetStepText(_ step: CWPSNStep?, reconnecting: Bool, attempt: I
 /// Shown when the stream keeps stuttering: offers to reconnect at lower quality.
 private struct StrugglingBanner: View {
 	let reason: StruggleDetector.Reason
+	/// AirDrop's link was active: say turning AirDrop off may help.
+	let airDrop: Bool
 	let lower: () -> Void
 	let dismiss: () -> Void
 
@@ -240,7 +243,8 @@ private struct StrugglingBanner: View {
 			VStack(alignment: .leading, spacing: 2) {
 				Text("Your connection is struggling").font(.headline)
 				Text((reason == .loss ? "Video is getting lost on the way." : "Frames are arriving late and unevenly.")
-					 + " Lower the quality for a smoother picture. The stream restarts, which takes a few seconds.")
+					 + " Lower the quality for a smoother picture. The stream restarts, which takes a few seconds."
+					 + (airDrop ? " AirDrop can also cause this: try turning it off in Control Centre." : ""))
 					.font(.callout)
 					.foregroundStyle(.secondary)
 					.fixedSize(horizontal: false, vertical: true)

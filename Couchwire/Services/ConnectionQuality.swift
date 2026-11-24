@@ -265,3 +265,14 @@ struct StruggleDetector {
 		return .smooth
 	}
 }
+
+/// Blip shield: hide passing loss from the PS5. It cuts its bitrate hard on any reported loss (43 to
+/// 1.5 Mbps in 15 s when told about 10%) and climbs back at only about 1.3 Mbps a minute, so one Wi-Fi
+/// scan (a few seconds of loss) could leave the picture soft for half an hour. Loss that lasts over
+/// 10 s is still passed on, so the PS5 can ease off for real congestion. At home only.
+enum BlipShield {
+	/// On unless switched off with `defaults write com.elbeehq.couchwire blipShield -bool false`.
+	static var isOn: Bool { UserDefaults.standard.object(forKey: "blipShield") as? Bool ?? true }
+	/// The most loss passed on once it has lasted: libchiaki's usual.
+	static let cap = 0.05
+}

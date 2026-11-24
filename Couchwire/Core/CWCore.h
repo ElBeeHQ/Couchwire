@@ -225,13 +225,26 @@ int cw_session_request_idr(CWSession *session);
 int cw_session_go_to_bed(CWSession *session);
 typedef struct {
 	double rtt_ms;             // measured once during connection setup
-	double packet_loss;        // 0...1, rolling (congestion control window)
+	double packet_loss;        // 0...1, rolling (congestion control window), as measured
 	double measured_bitrate_mbps;
 	unsigned int mtu_in;
+	int console_target_bitrate; // the console's own target bitrate, as it reports it (0 = not heard yet)
+	unsigned int shield_hidden; // blip shield: 200 ms reports whose loss was hidden so far
+	double shield_last_hidden;  // the loss in the last hidden report, 0...1
+	bool shield_passing;        // blip shield: loss has lasted, so it's being passed on now
 } CWNetworkStats;
 
 /// Snapshot of libchiaki's network statistics. Cheap; safe to call at any time.
 void cw_session_get_stats(CWSession *session, CWNetworkStats *out);
+
+/// Start picking up the console's target bitrate from its connection-quality messages, which
+/// libchiaki only logs at verbose level. Costs a little logging work.
+void cw_session_watch_console_bitrate(CWSession *session);
+/// Blip shield: hide passing loss (a Wi-Fi scan, say) from the console, which cuts its bitrate hard
+/// on any loss and takes about half an hour to climb back. Once loss has lasted over 10 s (gaps under 3 s count as
+/// one run) and is still steady (3 of the last 10 reports), it's passed on as usual, up to `cap`,
+/// until there's been none for 5 s. Main thread, once a stream runs.
+void cw_session_set_blip_shield(CWSession *session, double cap);
 
 // MARK: - PSN
 
