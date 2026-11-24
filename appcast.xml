@@ -3,6 +3,32 @@
     <channel>
         <title>Couchwire</title>
         <item>
+            <title>0.2.5</title>
+            <pubDate>Tue, 24 Nov 2026 17:08:18 +0000</pubDate>
+            <link>https://github.com/ElBeeHQ/Couchwire</link>
+            <sparkle:version>0.2.5</sparkle:version>
+            <sparkle:shortVersionString>0.2.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.5: A sharper picture after Wi-Fi hiccups
+
+*24 November 2026*
+
+At home, a short Wi-Fi stall no longer leaves the picture soft for the rest of the session, and if the picture does go soft after a longer bad patch, Couchwire offers to sharpen it again.
+
+### Added
+
+- **A sharp picture through short Wi-Fi stalls.** When it hears about lost video, your PS5 lowers the picture quality hard and then takes up to half an hour to raise it again. A few seconds of trouble, such as macOS scanning for Wi-Fi networks when you open the Wi-Fi menu, could leave the picture soft for a long time. At home, Couchwire now keeps short stalls to itself. If the trouble lasts, it tells the PS5 as before, so the PS5 can still ease off when the network is really busy.
+- **Sharpen.** If the picture is still soft after the connection has recovered, a banner offers to restart the stream. A fresh stream starts at full quality, and the restart takes a few seconds. At home only.
+- **An AirDrop tip.** On Wi-Fi, when AirDrop is on, the struggling banner says that turning AirDrop off in Control Centre can help. AirDrop makes the Mac's Wi-Fi leave your network for moments at a time.
+
+**Update:** Couchwire 0.1.0 and later offer this update by themselves; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.5.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
+
+**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.5-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.5-dependencies-source.tar` holds the exact sources of the libraries it's built with.
+]]></description>
+            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.5/Couchwire-0.2.5.dmg" length="7158395" type="application/octet-stream" sparkle:edSignature="skEuoBfzL6HXU4KhK93B2lVeIyPu/WverEfOYIzPFwJhTTyuZr+t8SbleMn0wMti75+k7SK/XANe01MjGsZZDw=="/>
+        </item>
+        <item>
             <title>0.2.4</title>
             <pubDate>Mon, 23 Nov 2026 22:00:11 +0000</pubDate>
             <link>https://github.com/ElBeeHQ/Couchwire</link>
@@ -59,46 +85,6 @@ Fixes a black screen when the PS5 turns down the first request to start a stream
 **Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.3-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.3-dependencies-source.tar` holds the exact sources of the libraries it's built with.
 ]]></description>
             <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.3/Couchwire-0.2.3.dmg" length="7125771" type="application/octet-stream" sparkle:edSignature="85LPOnKZ9r8VghZ5PZISgFALWV8uu3gxDyPHMUVivm06Yt7/G7nvRxLYBuCgdRARDSxMmHJ2o00AJq5ACmaJDA=="/>
-        </item>
-        <item>
-            <title>0.2.2</title>
-            <pubDate>Mon, 23 Nov 2026 18:18:06 +0000</pubDate>
-            <link>https://github.com/ElBeeHQ/Couchwire</link>
-            <sparkle:version>0.2.2</sparkle:version>
-            <sparkle:shortVersionString>0.2.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.2: Smoother on mobile data, sharper at home
-
-*23 November 2026*
-
-Automatic smoothing adds far less delay on a mobile hotspot, automatic quality gets back to full quality faster and can reach 50 Mbps at home, and Couchwire no longer quits while connecting over the internet.
-
-### Added
-
-- **Play on mobile data, with port forwarding.** Some mobile networks block internet play (Sony's app too). If you forward the PS5's ports on your home router, enter your home's address under **Away from Home** in the console's settings, and Couchwire connects straight to it, waking the PS5 first.
-- **Setup asks for the PS button.** When a controller is connected during setup, macOS asks whether Couchwire can respond to the PS button, and setup explains to click Allow.
-
-### Changed
-
-- **Automatic smoothing** no longer assumes the worst on mobile hotspots. It starts at Balanced and steps up to Steadiest only while frames keep arriving very late, then steps back down after a calm minute. On a steady hotspot that roughly halves the delay.
-- **Automatic quality climbs back faster.** After a session at home with a short, steady connection and nothing lost, it goes straight back to 1080p at 30 Mbps instead of one step at a time.
-- **Automatic quality can reach 50 Mbps at home.** After a smooth session at 30 Mbps on your home network, wired or Wi-Fi, it moves up to 50 Mbps, if your own settings allow it. Over the internet it stays at 30 Mbps at most.
-- A tidier **About Couchwire** window.
-- While connecting over the internet, Couchwire keeps libchiaki's detailed connection log, so slow or failed connections can be looked into. It asks a busy PS5 again after 8 seconds instead of 12.
-- The system log now records whether a stream is HDR at each step (what the PS5 sends, the decoded frames and the display's HDR headroom), and each change automatic quality makes.
-- The PS button tip and setup use a controller symbol instead of the PlayStation logo.
-
-### Fixed
-
-- **Lower Quality** no longer fails over the internet. The PS5 takes up to a minute to let go of the old stream, so Couchwire now keeps asking, as it does after a network change, and says it's restarting at lower quality.
-- Couchwire no longer quits while connecting over the internet. On some networks it opens 250 sockets at once to find a way through, which used up macOS's limit of 256 for an app.
-
-**Update:** Couchwire 0.1.0 and later offer this update by themselves; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.2.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
-
-**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.2-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.2-dependencies-source.tar` holds the exact sources of the libraries it's built with.
-]]></description>
-            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.2/Couchwire-0.2.2.dmg" length="7125507" type="application/octet-stream" sparkle:edSignature="ABItbuv1mw15pLxjj8RWvfo/NX3/zioCGMZ6PRxo5En/4r7DhhKtiMJckIsUjajTlZns7UCio88Vk6JWsudJAw=="/>
         </item>
     </channel>
 </rss>
