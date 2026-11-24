@@ -119,6 +119,11 @@ typedef struct {
 	/// Internet play: don't look for a UPnP router first. Mobile hotspots never have one, and the
 	/// search takes 7 s to give up.
 	bool psn_skip_upnp;
+	/// Internet play: while the console hasn't answered, ask it again this often (ms) within the
+	/// same PSN session, for up to a minute. A PS5 still holding a stream that ended without a
+	/// goodbye (after a network change, say) ignores requests until it lets go, about 40 s. 0 asks
+	/// once and waits, as libchiaki does (up to 30 s).
+	unsigned int psn_reask_ms;
 } CWSessionConfig;
 
 typedef struct {
@@ -207,7 +212,8 @@ uint8_t cw_feedback_trigger_reduction(void);
 /// thread, and wait for it to return before cw_session_free. Returns 0 on success, otherwise a
 /// ChiakiErrorCode: CW_ERR_HOST_DOWN if the console never joined (asleep without network wake, off,
 /// or signed in to a different account), CW_ERR_HOST_UNREACH if no direct connection could be made
-/// (the network type blocks it), CW_ERR_CANCELED after cw_session_psn_cancel.
+/// (the network type blocks it), CW_ERR_CANCELED after cw_session_psn_cancel. With `psn_reask_ms`,
+/// CW_ERR_HOST_DOWN comes after a minute of asking.
 int cw_session_psn_connect(CWSession *session);
 /// Stops cw_session_psn_connect early. Safe from any thread.
 void cw_session_psn_cancel(CWSession *session);

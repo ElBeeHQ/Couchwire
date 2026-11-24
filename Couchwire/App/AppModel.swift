@@ -300,10 +300,15 @@ final class AppModel {
 			return nil
 		}
 		let link = ConnectionQuality.currentLink(internet: true)
+		// Our last stream from this console ended a moment ago (a network change, a restart): it ignores
+		// requests until it lets go of that stream, so keep asking within one PSN session rather than
+		// waiting out each request. Not for a console waking from rest mode, which answers the first.
+		let reask = reconnecting != nil
+			|| streamEnded[console.hostID].map { ContinuousClock.now - $0 < Self.releaseWindow } == true
 		let s = StreamSession(console: current, keys: keys, settings: streamSettings(link, ceiling: ceiling), link: link,
 							  automaticQuality: autoQuality, smoothing: smoothing,
 							  internet: .init(accessToken: token, deviceID: deviceID, forcePortGuessing: forcePortGuessing,
-											  skipRouterSearch: link == .internetMobile))
+											  skipRouterSearch: link == .internetMobile, reaskConsole: reask))
 		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
 		session = s
 		s.start()
@@ -504,8 +509,10 @@ final class AppModel {
 		}
 		StreamSession.timing.notice("Network ready")
 		// Keep trying for up to 2 minutes. The console holds on to the lost stream for a while (it never
-		// heard it end) and ignores new requests until it lets go, so an unanswered request is
-		// abandoned after 8 s and made again, rather than waiting out libchiaki's 30 s.
+		// heard it end) and ignores new requests until it lets go. Over the internet the session keeps
+		// asking it within one PSN session (`reaskConsole`) for up to a minute; one that only asks once
+		// is abandoned after 8 s and made again with a new PSN session, rather than waiting out
+		// libchiaki's 30 s.
 		let deadline = ContinuousClock.now + .seconds(120)
 		var attempt = 0
 		// Tries in a row that reached the console but couldn't open a direct connection to it.
@@ -539,8 +546,10 @@ final class AppModel {
 				if s.internetStep == CW_PSN_STEP_CONSOLE {
 					let since = waitingSince ?? ContinuousClock.now
 					waitingSince = since
-					if ContinuousClock.now - since > .seconds(8) {
-						StreamSession.timing.notice("Console didn’t answer in 8 s; asking again")
+					// A re-asking session gives up by itself after a minute; this is only a backstop.
+					let limit = s.internet?.reaskConsole == true ? 65 : 8
+					if ContinuousClock.now - since > .seconds(limit) {
+						StreamSession.timing.notice("Console didn’t answer in \(limit, privacy: .public) s; asking again")
 						break
 					}
 				} else {

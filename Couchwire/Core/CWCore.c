@@ -298,6 +298,14 @@ struct CWSession {
 	ChiakiHolepunchSession holepunch;
 	uint8_t psn_duid[32];
 	bool psn_skip_upnp;
+	unsigned int psn_reask_ms;
+	/// cw_session_psn_cancel was called: a cancel is ours to report, not a re-ask's.
+	atomic_bool psn_canceled;
+	/// While psn_ask_console re-asks the console (see there).
+	struct PSNReask *_Atomic psn_reask;
+	/// libchiaki's PSN session was left with its state lock held (see psn_ask_console): freeing it
+	/// would hang, so the session is leaked instead.
+	bool psn_wedged;
 	/// The console's Vibration Intensity setting as a gain for rumble and haptics (0 = off).
 	_Atomic float feedback_gain;
 	/// The console's Trigger Effect Intensity setting is Off.
@@ -509,6 +517,7 @@ CWSession *cw_session_create(const CWSessionConfig *config, CWSessionCallbacks c
 		}
 		chiaki_holepunch_session_force_port_guessing(s->holepunch, config->psn_force_port_guessing);
 		s->psn_skip_upnp = config->psn_skip_upnp;
+		s->psn_reask_ms = config->psn_reask_ms;
 		memcpy(s->psn_duid, config->psn_duid, sizeof(s->psn_duid));
 	}
 
@@ -582,6 +591,128 @@ int cw_session_start(CWSession *s)
 	return (int)err;
 }
 
+/// Re-asking the console: a watchdog cancels libchiaki's wait for the console every `interval_ms`,
+/// and psn_ask_console sends the request again within the same PSN session.
+typedef struct PSNReask {
+	CWSession *s;
+	pthread_mutex_t mutex;
+	bool waiting;          // the request is out and libchiaki is waiting for the console
+	bool answering;        // the console has started to answer: let libchiaki finish
+	uint64_t asked_ms;     // when the current request went out
+	bool fired;            // the watchdog canceled the current request
+	uint64_t fired_ms;
+	atomic_bool stop;
+	unsigned int interval_ms;
+} PSNReask;
+
+static uint64_t now_ms(void);
+
+static void *psn_reask_thread_func(void *user)
+{
+	PSNReask *r = user;
+	while(!atomic_load(&r->stop))
+	{
+		usleep(100 * 1000);
+		pthread_mutex_lock(&r->mutex);
+		// Under the mutex, so it can't land after psn_ask_console has stopped waiting.
+		if(r->waiting && !r->answering && now_ms() - r->asked_ms >= r->interval_ms)
+		{
+			r->fired = true;
+			r->fired_ms = now_ms();
+			r->waiting = false;
+			chiaki_holepunch_main_thread_cancel(r->s->holepunch, false);
+		}
+		pthread_mutex_unlock(&r->mutex);
+	}
+	return NULL;
+}
+
+/// Asks the console to join the PSN session. With `psn_reask_ms`, asks again that often while it
+/// hasn't answered, for up to a minute.
+static ChiakiErrorCode psn_ask_console(CWSession *s)
+{
+	ChiakiHolepunchSession hp = s->holepunch;
+	if(!s->psn_reask_ms)
+		return chiaki_holepunch_session_start(hp, s->psn_duid, CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS5);
+
+	PSNReask r = { .s = s, .interval_ms = s->psn_reask_ms };
+	atomic_store(&r.stop, false);
+	pthread_mutex_init(&r.mutex, NULL);
+	// libchiaki says at verbose level when the console's answer arrives (see session_log_forward).
+	// A cancel that libchiaki notices while handling an answer makes chiaki_holepunch_session_start
+	// return with its state lock still held, so the watchdog stops at the first sign of an answer.
+	// That can't quite close the gap: libchiaki checks for a cancel just before it logs the answer,
+	// so a cancel landing in those few microseconds is caught after it, with the lock held. That's
+	// spotted below (our cancel, and an answer seen) and the PSN session is given up.
+	uint32_t level_mask = s->log.level_mask;
+	s->log.level_mask |= CHIAKI_LOG_VERBOSE;
+	atomic_store(&s->psn_reask, &r);
+	pthread_t thread;
+	bool watching = pthread_create(&thread, NULL, psn_reask_thread_func, &r) == 0;
+	uint64_t deadline = now_ms() + 60000;
+	ChiakiErrorCode err;
+	for(int attempt = 1; ; attempt++)
+	{
+		pthread_mutex_lock(&r.mutex);
+		r.waiting = watching;
+		r.asked_ms = now_ms();
+		r.fired = false;
+		pthread_mutex_unlock(&r.mutex);
+		err = chiaki_holepunch_session_start(hp, s->psn_duid, CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS5);
+		pthread_mutex_lock(&r.mutex);
+		r.waiting = false;
+		bool fired = r.fired;
+		bool answering = r.answering;
+		uint64_t lag_ms = fired ? now_ms() - r.fired_ms : 0;
+		pthread_mutex_unlock(&r.mutex);
+		if(err == CHIAKI_ERR_SUCCESS)
+		{
+			if(attempt > 1)
+				CHIAKI_LOGI(&s->log, "PSN: the console answered request %d", attempt);
+			break;
+		}
+		// The watchdog never fires once an answer has been seen, so both together mean it fired just
+		// before one and libchiaki caught the cancel while handling it, with its lock held. Calling
+		// into this PSN session again would hang; the caller starts a fresh one.
+		if(err == CHIAKI_ERR_CANCELED && fired && answering)
+		{
+			CHIAKI_LOGE(&s->log, "PSN: asking again crossed with the console's answer; starting over");
+			s->psn_wedged = true;
+			err = CHIAKI_ERR_UNKNOWN;
+			break;
+		}
+		// Anything but our own cancel (a real cancel, an error from PSN) ends it: the caller can start
+		// afresh with a new PSN session, as before.
+		if(err != CHIAKI_ERR_CANCELED || !fired || atomic_load(&s->psn_canceled))
+			break;
+		if(now_ms() >= deadline)
+		{
+			CHIAKI_LOGE(&s->log, "PSN: the console didn't answer %d requests in a minute", attempt);
+			err = CHIAKI_ERR_HOST_DOWN;
+			break;
+		}
+		// libchiaki notices a cancel at once while it waits for the console, but only after the request
+		// has gone if it was still sending it. A slow request then needs longer between asks, or the
+		// wait for the console would never start (any answer to an earlier ask is still picked up).
+		if(lag_ms > 250 && r.interval_ms < 15000)
+		{
+			pthread_mutex_lock(&r.mutex);
+			r.interval_ms = r.interval_ms * 2 > 15000 ? 15000 : r.interval_ms * 2;
+			pthread_mutex_unlock(&r.mutex);
+			CHIAKI_LOGI(&s->log, "PSN: the request to the console is slow (%llu ms late); asking every %u ms",
+				(unsigned long long)lag_ms, r.interval_ms);
+		}
+		CHIAKI_LOGI(&s->log, "PSN: no answer from the console yet; asking again");
+	}
+	atomic_store(&r.stop, true);
+	if(watching)
+		pthread_join(thread, NULL);
+	atomic_store(&s->psn_reask, NULL);
+	s->log.level_mask = level_mask;
+	pthread_mutex_destroy(&r.mutex);
+	return err;
+}
+
 int cw_session_psn_connect(CWSession *s)
 {
 	if(!s->holepunch)
@@ -612,7 +743,7 @@ int cw_session_psn_connect(CWSession *s)
 
 	// Asking the console to join also wakes it from rest mode.
 	psn_progress(s, CW_PSN_STEP_CONSOLE);
-	err = chiaki_holepunch_session_start(hp, s->psn_duid, CHIAKI_HOLEPUNCH_CONSOLE_TYPE_PS5);
+	err = psn_ask_console(s);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
 		CHIAKI_LOGE(&s->log, "Console didn't join the PSN session: %s", chiaki_error_string(err));
@@ -633,7 +764,10 @@ int cw_session_psn_connect(CWSession *s)
 
 void cw_session_psn_cancel(CWSession *s)
 {
-	if(s && s->holepunch)
+	if(!s)
+		return;
+	atomic_store(&s->psn_canceled, true);
+	if(s->holepunch)
 		chiaki_holepunch_main_thread_cancel(s->holepunch, false);
 }
 
@@ -650,6 +784,12 @@ void cw_session_free(CWSession *s)
 		return;
 	// Before the session goes: the shield thread uses its packet stats.
 	shield_thread_stop(s);
+	if(s->psn_wedged)
+	{
+		// chiaki_session_fini would wait forever for the PSN session's lock. Rare; leak it instead.
+		CHIAKI_LOGE(&s->log, "PSN session left locked; not freeing it");
+		return;
+	}
 	if(s->started)
 	{
 		chiaki_session_stop(&s->session);
@@ -853,13 +993,23 @@ void cw_session_set_blip_shield(CWSession *s, double cap)
 		s->shield_running = true;
 }
 
-/// The session's log. Verbose messages are only switched on to read the console's target
-/// bitrate; they're never passed on.
+/// The session's log. Verbose messages are only switched on to read the console's target bitrate
+/// (at home) or to see the console's answer while re-asking it (over the internet); they're never
+/// passed on.
 static void session_log_forward(ChiakiLogLevel level, const char *msg, void *user)
 {
 	CWSession *s = user;
 	if(level == CHIAKI_LOG_VERBOSE)
 	{
+		struct PSNReask *r = atomic_load(&s->psn_reask);
+		static const char answer[] = "wait_for_notification: Found notification";
+		if(r && strncmp(msg, answer, sizeof(answer) - 1) == 0)
+		{
+			pthread_mutex_lock(&r->mutex);
+			r->answering = true;
+			pthread_mutex_unlock(&r->mutex);
+			return;
+		}
 		static const char prefix[] = "StreamConnection received connection quality: target_bitrate=";
 		if(strncmp(msg, prefix, sizeof(prefix) - 1) == 0)
 			atomic_store(&s->console_target_bitrate, atoi(msg + sizeof(prefix) - 1));

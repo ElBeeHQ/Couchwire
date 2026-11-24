@@ -38,6 +38,9 @@ final class StreamSession {
 		let forcePortGuessing: Bool
 		/// Don't look for a UPnP router: mobile hotspots never have one.
 		var skipRouterSearch = false
+		/// Keep asking the console every few seconds within one PSN session (it's still letting go of
+		/// our last stream), for up to a minute.
+		var reaskConsole = false
 	}
 	/// Refreshed twice a second while streaming, for the performance overlay.
 	private(set) var stats = StreamStats.Snapshot()
@@ -159,6 +162,7 @@ final class StreamSession {
 			withUnsafeMutableBytes(of: &cfg.psn_duid) { dst in internet.deviceID.prefix(32).copyBytes(to: dst.bindMemory(to: UInt8.self).baseAddress!, count: min(32, internet.deviceID.count)) }
 			cfg.psn_force_port_guessing = internet.forcePortGuessing
 			cfg.psn_skip_upnp = internet.skipRouterSearch
+			cfg.psn_reask_ms = internet.reaskConsole ? 3000 : 0
 		}
 		let host = strdup(console.lastAddress)
 		defer { free(host) }
@@ -273,7 +277,7 @@ final class StreamSession {
 			// Finding the console through PSN and opening a connection blocks for up to a minute.
 			startedAt = CACurrentMediaTime()
 			keepCoreLog = true
-			Self.timing.notice("Internet connect started")
+			Self.timing.notice("Internet connect started\(self.internet?.reaskConsole == true ? " (re-asking the console)" : "", privacy: .public)")
 			internetStep = CW_PSN_STEP_ROUTER
 			connecting.enter()
 			DispatchQueue.global(qos: .userInitiated).async { [connecting] in
