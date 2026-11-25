@@ -2,7 +2,7 @@
 
 ## v0.2.7: Cleaner cancels over the internet
 
-*Not released yet*
+*25 November 2026*
 
 Cancelling an internet connect no longer leaves part of it running in the background, and the code behind it gets a tidy.
 
