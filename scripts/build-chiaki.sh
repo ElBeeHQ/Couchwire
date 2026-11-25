@@ -5,11 +5,40 @@
 #
 # Build tools (Homebrew): cmake pkg-config protobuf
 # A Python venv at .venv with `protobuf` is used for nanopb code generation.
+#
+# Fixes Couchwire carries on top of chiaki-ng live in patches/chiaki-ng/*.patch. The
+# submodule itself stays untouched (package.sh needs a clean tree): its source is copied
+# to build/chiaki/src, the patches are applied there, and libchiaki is built from the copy.
+# The library is stamped with the submodule (commits, nested submodules, local edits), the
+# patches and this script, so changing any of them rebuilds it; otherwise this script
+# returns straight away.
+#
+# When chiaki-ng takes one of the fixes upstream and the submodule moves past it, the
+# build stops and says which patch to delete.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build/chiaki"
+SRC="$BUILD/src"
 DEPS="$ROOT/build/deps/prefix"
+LIB="$BUILD/out/libchiaki_all.a"
+STAMP="$BUILD/out/stamp"
+
+VENDOR="$ROOT/Vendor/chiaki-ng"
+PATCHES=()
+for p in "$ROOT"/patches/chiaki-ng/*.patch; do
+	[ -f "$p" ] && PATCHES+=("$p")
+done
+# (bash 3.2 treats an empty array as unset under `set -u`, hence the ${…+…} forms.)
+WANT="$(
+	git -C "$VENDOR" rev-parse HEAD
+	git -C "$VENDOR" submodule status --recursive
+	git -C "$VENDOR" status --porcelain --ignore-submodules=none | shasum
+	cat /dev/null ${PATCHES[@]+"${PATCHES[@]}"} "$0" | shasum
+)"
+if [ -f "$LIB" ] && [ "$(cat "$STAMP" 2>/dev/null)" = "$WANT" ]; then
+	exit 0
+fi
 
 if [ ! -f "$DEPS/lib/libcurl.a" ]; then
 	"$ROOT/scripts/build-deps.sh"
@@ -33,7 +62,33 @@ if [ ! -x "$ROOT/.venv/bin/python3" ]; then
 	"$ROOT/.venv/bin/pip" install -q protobuf
 fi
 
-cmake -S "$ROOT/Vendor/chiaki-ng" -B "$BUILD" \
+# The source copy, with Couchwire's patches applied. Files are compared by content and any
+# that differ are written fresh (dates not kept), so a file a patch no longer touches is
+# newer than its old object and gets rebuilt; untouched files keep their dates.
+mkdir -p "$SRC"
+rsync -rlp --checksum --delete --exclude .git "$VENDOR/" "$SRC/"
+for p in ${PATCHES[@]+"${PATCHES[@]}"}; do
+	name="${p#"$ROOT"/}"
+	if (cd "$SRC" && patch -p1 -R --dry-run --force --quiet < "$p" > /dev/null 2>&1); then
+		echo "error: chiaki-ng already has the fix in $name (taken upstream?). Delete $name and build again." >&2
+		exit 1
+	fi
+	echo "Applying $name"
+	# No fuzz: a patch that no longer fits exactly fails instead of landing in the wrong place.
+	if ! (cd "$SRC" && patch -p1 --forward --fuzz=0 --no-backup-if-mismatch < "$p"); then
+		echo "error: $name no longer applies to this chiaki-ng. Update it for the new submodule commit, or delete it if the fix is upstream." >&2
+		exit 1
+	fi
+done
+
+# A build folder configured from somewhere else (the submodule itself, before patches were
+# carried) can't be reused: CMake refuses a different source folder, and old targets' archives
+# would be merged into the library below. Start that build folder afresh.
+if [ -f "$BUILD/CMakeCache.txt" ] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$SRC" "$BUILD/CMakeCache.txt"; then
+	find "$BUILD" -mindepth 1 -maxdepth 1 ! -name src ! -name shim ! -name out -exec rm -rf {} +
+fi
+
+cmake -S "$SRC" -B "$BUILD" \
 	-DCMAKE_BUILD_TYPE=Release \
 	-DCMAKE_OSX_ARCHITECTURES=arm64 \
 	-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
@@ -61,5 +116,6 @@ cmake --build "$BUILD" --target chiaki-lib -j "$(sysctl -n hw.ncpu)"
 # into one archive the Xcode project links against.
 mkdir -p "$BUILD/out"
 rm -f "$BUILD/out/libchiaki_all.a"
-find "$BUILD" -name '*.a' -not -path "$BUILD/out/*" -print0 | xargs -0 libtool -static -o "$BUILD/out/libchiaki_all.a"
-echo "libchiaki built: $BUILD/out/libchiaki_all.a"
+find "$BUILD" -name '*.a' -not -path "$BUILD/out/*" -not -path "$SRC/*" -print0 | xargs -0 libtool -static -o "$BUILD/out/libchiaki_all.a"
+echo "$WANT" > "$STAMP"
+echo "libchiaki built: $LIB (${#PATCHES[@]} patch(es) applied)"

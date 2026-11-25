@@ -33,7 +33,16 @@ RELEASES_REPO="ElBeeHQ/Couchwire"
 SPARKLE_ACCOUNT="couchwire"
 
 cd "$ROOT"
-if [ "${PUBLISH:-}" = "1" ] && [ -n "$(git status --porcelain --ignore-submodules=none)" ]; then
+# The source archive and the clean-tree check both need chiaki-ng as a real submodule checkout.
+# In a worktree it's often a symlink to the main checkout's, which makes git fail on every
+# submodule command, so stop here rather than publish incomplete source.
+if [ -L Vendor/chiaki-ng ] || ! git submodule status --recursive > /dev/null; then
+	echo "Vendor/chiaki-ng isn't a submodule checkout here (a symlink?). Package from the main checkout." >&2
+	exit 1
+fi
+# On their own lines, so a failing git stops the script (set -e doesn't look inside a test).
+STATUS="$(git status --porcelain --ignore-submodules=none)"
+if [ "${PUBLISH:-}" = "1" ] && [ -n "$STATUS" ]; then
 	echo "Commit your changes first: the published source must match the build." >&2
 	exit 1
 fi
@@ -81,12 +90,22 @@ rm -rf "$PARTS"; mkdir -p "$PARTS"
 git archive --prefix="Couchwire-$VERSION/" -o "$PARTS/0.tar" HEAD
 n=1
 # Every initialised submodule (chiaki-ng and the ones it builds from), at the commit used.
+SUBMODULES="$(git submodule foreach --recursive --quiet 'echo "$displaypath"')"
 while read -r sub; do
 	git -C "$sub" archive --prefix="Couchwire-$VERSION/$sub/" -o "$PARTS/$n.tar" HEAD
 	n=$((n + 1))
-done < <(git submodule foreach --recursive --quiet 'echo "$displaypath"')
+done <<< "$SUBMODULES"
 tar -czf "$SRC_TAR" $(for f in "$PARTS"/*.tar; do echo "@$f"; done)
 rm -rf "$PARTS"
+# The archive must let anyone rebuild what's in the DMG: chiaki-ng and the patches on top of it.
+LISTING="$(tar -tzf "$SRC_TAR")"
+for f in Vendor/chiaki-ng/lib/src/remote/holepunch.c Vendor/chiaki-ng/third-party/nanopb/pb.h scripts/build-chiaki.sh; do
+	grep -qx "Couchwire-$VERSION/$f" <<< "$LISTING" || { echo "The source archive is missing $f" >&2; exit 1; }
+done
+for p in patches/chiaki-ng/*.patch; do
+	[ -f "$p" ] || continue
+	grep -qx "Couchwire-$VERSION/$p" <<< "$LISTING" || { echo "The source archive is missing $p (commit it first)" >&2; exit 1; }
+done
 DEPS_TAR="$OUT/Couchwire-$VERSION-dependencies-source.tar"
 [ -d build/deps/src ] || { echo "build/deps/src is missing; run scripts/build-deps.sh" >&2; exit 1; }
 tar -cf "$DEPS_TAR" -C build/deps src

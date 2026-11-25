@@ -213,7 +213,8 @@ uint8_t cw_feedback_trigger_reduction(void);
 /// ChiakiErrorCode: CW_ERR_HOST_DOWN if the console never joined (asleep without network wake, off,
 /// or signed in to a different account), CW_ERR_HOST_UNREACH if no direct connection could be made
 /// (the network type blocks it), CW_ERR_CANCELED after cw_session_psn_cancel. With `psn_reask_ms`,
-/// CW_ERR_HOST_DOWN comes after a minute of asking.
+/// CW_ERR_HOST_DOWN comes after a minute of asking, and CW_ERR_PSN_ANSWER_CROSSED if the console
+/// answered just as it was being asked again (start a fresh connect).
 int cw_session_psn_connect(CWSession *session);
 /// Stops cw_session_psn_connect early. Safe from any thread.
 void cw_session_psn_cancel(CWSession *session);
@@ -257,6 +258,8 @@ void cw_session_set_blip_shield(CWSession *session, double cap);
 #define CW_ERR_CANCELED 14
 #define CW_ERR_HOST_DOWN 8
 #define CW_ERR_HOST_UNREACH 9
+/// Couchwire's own, outside ChiakiErrorCode's range: see cw_session_psn_connect.
+#define CW_ERR_PSN_ANSWER_CROSSED 1000
 
 typedef struct {
 	char name[32];

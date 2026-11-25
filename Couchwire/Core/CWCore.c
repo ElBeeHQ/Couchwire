@@ -57,6 +57,8 @@ int cw_init(void)
 
 const char *cw_error_string(int code)
 {
+	if(code == CW_ERR_PSN_ANSWER_CROSSED)
+		return "Answer crossed with a new request";
 	return chiaki_error_string((ChiakiErrorCode)code);
 }
 
@@ -303,9 +305,6 @@ struct CWSession {
 	atomic_bool psn_canceled;
 	/// While psn_ask_console re-asks the console (see there).
 	struct PSNReask *_Atomic psn_reask;
-	/// libchiaki's PSN session was left with its state lock held (see psn_ask_console): freeing it
-	/// would hang, so the session is leaked instead.
-	bool psn_wedged;
 	/// The console's Vibration Intensity setting as a gain for rumble and haptics (0 = off).
 	_Atomic float feedback_gain;
 	/// The console's Trigger Effect Intensity setting is Off.
@@ -639,11 +638,10 @@ static ChiakiErrorCode psn_ask_console(CWSession *s)
 	atomic_store(&r.stop, false);
 	pthread_mutex_init(&r.mutex, NULL);
 	// libchiaki says at verbose level when the console's answer arrives (see session_log_forward).
-	// A cancel that libchiaki notices while handling an answer makes chiaki_holepunch_session_start
-	// return with its state lock still held, so the watchdog stops at the first sign of an answer.
-	// That can't quite close the gap: libchiaki checks for a cancel just before it logs the answer,
-	// so a cancel landing in those few microseconds is caught after it, with the lock held. That's
-	// spotted below (our cancel, and an answer seen) and the PSN session is given up.
+	// The watchdog stops at the first sign of an answer, so it doesn't cut one off. libchiaki checks
+	// for a cancel just before it logs the answer, though, so a cancel landing in those few
+	// microseconds is caught while the answer is handled. That's spotted below (our cancel, and an
+	// answer seen) and the PSN session is given up: it's half-way through the console joining.
 	// libchiaki's threads read the mask while this runs, so it's changed atomically.
 	uint32_t level_mask = __atomic_fetch_or(&s->log.level_mask, CHIAKI_LOG_VERBOSE, __ATOMIC_RELAXED);
 	atomic_store(&s->psn_reask, &r);
@@ -672,13 +670,13 @@ static ChiakiErrorCode psn_ask_console(CWSession *s)
 			break;
 		}
 		// The watchdog never fires once an answer has been seen, so both together mean it fired just
-		// before one and libchiaki caught the cancel while handling it, with its lock held. Calling
-		// into this PSN session again would hang; the caller starts a fresh one.
+		// before one and libchiaki caught the cancel while handling it. The PSN session is then
+		// half-joined, so the caller starts a fresh one. (patches/chiaki-ng/0001 makes libchiaki
+		// release its lock on that path; before, this session couldn't be freed at all.)
 		if(err == CHIAKI_ERR_CANCELED && fired && answering)
 		{
 			CHIAKI_LOGE(&s->log, "PSN: asking again crossed with the console's answer; starting over");
-			s->psn_wedged = true;
-			err = CHIAKI_ERR_UNKNOWN;
+			err = (ChiakiErrorCode)CW_ERR_PSN_ANSWER_CROSSED;
 			break;
 		}
 		// Anything but our own cancel (a real cancel, an error from PSN) ends it: the caller can start
@@ -746,7 +744,7 @@ int cw_session_psn_connect(CWSession *s)
 	err = psn_ask_console(s);
 	if(err != CHIAKI_ERR_SUCCESS)
 	{
-		CHIAKI_LOGE(&s->log, "Console didn't join the PSN session: %s", chiaki_error_string(err));
+		CHIAKI_LOGE(&s->log, "Console didn't join the PSN session: %s", cw_error_string((int)err));
 		return (int)err;
 	}
 
@@ -784,12 +782,6 @@ void cw_session_free(CWSession *s)
 		return;
 	// Before the session goes: the shield thread uses its packet stats.
 	shield_thread_stop(s);
-	if(s->psn_wedged)
-	{
-		// chiaki_session_fini would wait forever for the PSN session's lock. Rare; leak it instead.
-		CHIAKI_LOGE(&s->log, "PSN session left locked; not freeing it");
-		return;
-	}
 	if(s->started)
 	{
 		chiaki_session_stop(&s->session);

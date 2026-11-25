@@ -92,7 +92,8 @@ release also carries `Couchwire-<version>-source.tar.gz` (this repository with c
 `Couchwire-<version>-dependencies-source.tar` (the exact sources of the libraries it links).
 
 The Remote Play protocol core (discovery, pairing, Takion transport, crypto, FEC) is `libchiaki`, vendored as a
-submodule under `Vendor/chiaki-ng`. Everything else is native Swift, SwiftUI and AppKit:
+submodule under `Vendor/chiaki-ng`. The few fixes Couchwire carries on top of it are in `patches/chiaki-ng/`;
+`scripts/build-chiaki.sh` applies them to a copy of the submodule and builds from that. Everything else is native Swift, SwiftUI and AppKit:
 
 | Layer   | Implementation |
 |---------|----------------|

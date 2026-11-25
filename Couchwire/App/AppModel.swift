@@ -80,7 +80,10 @@ final class AppModel {
 	/// Shown to the user, and written to the Timing log so a failed connect can be looked into later.
 	var lastError: String? {
 		didSet {
-			if let lastError { StreamSession.timing.notice("Error shown: \(lastError, privacy: .public)") }
+			// The message stays readable, but console names in it are hidden (the log is kept).
+			if let lastError {
+				StreamSession.timing.notice("Error shown: \(maskNames(lastError, self.registered.map(\.nickname)), privacy: .public)")
+			}
 		}
 	}
 

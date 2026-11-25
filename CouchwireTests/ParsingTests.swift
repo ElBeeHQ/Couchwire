@@ -122,6 +122,9 @@ final class LogMaskingTests: XCTestCase {
 		XCTAssertEqual(maskAddresses("Connecting to 192.168.1.20:9295"), "Connecting to <address>:9295")
 		XCTAssertEqual(maskAddresses("candidate fe80::1c2b:3a4d:5e6f:7a8b%en0"), "candidate <address>%en0")
 		XCTAssertEqual(maskAddresses("mac a0:b1:c2:d3:e4:f5 seen"), "mac <address> seen")
+		XCTAssertEqual(maskNames("Couldn’t connect to PS5-304 over the internet.", ["", "PS5-304"]),
+					   "Couldn’t connect to <console> over the internet.")
+		XCTAssertEqual(maskNames("No console named here", ["PS5-304"]), "No console named here")
 	}
 
 	func testLeavesOrdinaryTextAlone() {

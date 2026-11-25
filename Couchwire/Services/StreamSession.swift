@@ -300,10 +300,14 @@ final class StreamSession {
 			Self.timing.notice("Internet connect started\(self.internet?.reaskConsole == true ? " (re-asking the console)" : "", privacy: .public)")
 			internetStep = CW_PSN_STEP_ROUTER
 			connecting.enter()
-			DispatchQueue.global(qos: .userInitiated).async { [connecting] in
-				let err = cw_session_psn_connect(h)
+			// Passed as a plain number: a C pointer isn't Sendable. Self is held weakly: every owner
+			// calls stop() before letting go, which cancels this connect and frees the handle once
+			// it returns, so a session that's gone has nothing left for internetConnectFinished.
+			let bits = UInt(bitPattern: h)
+			DispatchQueue.global(qos: .userInitiated).async { [connecting, weak self] in
+				let err = cw_session_psn_connect(OpaquePointer(bitPattern: bits))
 				connecting.leave()
-				Task { @MainActor [weak self] in self?.internetConnectFinished(err) }
+				Task { @MainActor [self] in self?.internetConnectFinished(err) }
 			}
 			return
 		}
@@ -337,6 +341,8 @@ final class StreamSession {
 		let name = console.nickname
 		let message: String? = switch err {
 		case CW_ERR_CANCELED: nil
+		case CW_ERR_PSN_ANSWER_CROSSED:
+			"\(name) answered just as Couchwire asked it again, so the connection couldn’t be finished. Try again."
 		case CW_ERR_HOST_DOWN:
 			"\(name) didn’t answer over the internet. Check it’s switched on or in rest mode with “Stay Connected to the Internet” on, and signed in to your PSN account."
 		case CW_ERR_HOST_UNREACH where PathWatcher.shared.usesVPN:
@@ -625,9 +631,10 @@ final class StreamSession {
 		// Stop an internet connection that's still being set up; it must finish before the free.
 		if internet != nil { cw_session_psn_cancel(h) }
 		// cw_session_free joins libchiaki's thread; never do that on the main thread.
+		let bits = UInt(bitPattern: h)
 		DispatchQueue.global(qos: .userInitiated).async { [connecting] in
 			connecting.wait()
-			cw_session_free(h)
+			cw_session_free(OpaquePointer(bitPattern: bits))
 			box?.release()
 		}
 	}

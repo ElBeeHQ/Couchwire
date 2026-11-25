@@ -14,7 +14,9 @@ func logFromCore(_ level: Int32, _ msg: UnsafePointer<CChar>?) {
 	}
 	// These lines are kept, so network addresses in them are hidden. The rest stays readable,
 	// so a slow or failed connect can still be looked into.
-	let s = maskAddresses(raw)
+	var s = maskAddresses(raw)
+	// The one kept chiaki line that names the console.
+	if s.hasSuffix(" successfully registered for Remote Play") { s = "<console> successfully registered for Remote Play" }
 	switch level {
 	case Int32(CW_LOG_ERROR.rawValue): coreLog.error("\(s, privacy: .public)")
 	case Int32(CW_LOG_WARNING.rawValue): coreLog.warning("\(s, privacy: .public)")
@@ -36,6 +38,11 @@ func maskAddresses(_ s: String) -> String {
 		out = re.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "<address>")
 	}
 	return out
+}
+
+/// Replaces each of `names` (console nicknames) in `s` with "<console>".
+func maskNames(_ s: String, _ names: [String]) -> String {
+	names.filter { !$0.isEmpty }.reduce(s) { $0.replacingOccurrences(of: $1, with: "<console>") }
 }
 
 /// On while an internet connection is being set up. A plain flag: an off-by-one log line doesn't matter.

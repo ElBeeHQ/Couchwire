@@ -1,0 +1,103 @@
+From: ElBeeHQ <hello@elbeehq.com>
+Subject: holepunch: release state_mutex on every early exit
+
+chiaki_holepunch_session_create and chiaki_holepunch_session_start take
+session->state_mutex after each notification. Several exits left it held:
+
+- session_create: cancel, unexpected notification type, missing online id,
+  out of memory, and a `break` on bad JSON (nothing unlocked after the loop).
+- session_start: cancel.
+
+Any later call into the session (chiaki_holepunch_session_fini, for one) then
+waits on the lock for ever. Every early exit now goes through one place that
+unlocks and clears the pending notification.
+
+Also in session_start:
+- A normal finish unlocked state_mutex twice (in the loop, then after it).
+  The unlock after the loop now runs only when the loop was left early.
+- A shadowed `err` meant a bad deviceUniqueId hex string returned success.
+
+Applied to chiaki-ng at the submodule commit by scripts/build-chiaki.sh.
+---
+--- a/lib/src/remote/holepunch.c
++++ b/lib/src/remote/holepunch.c
+@@ -1055,14 +1055,14 @@
+             {
+                 CHIAKI_LOGE(session->log, "chiaki_holepunch_session_create: could not extra PSN online id string.");
+                 err = CHIAKI_ERR_UNKNOWN;
+-                return err;
++                break;
+             }
+             session->online_id = malloc((strlen(online_id) + 1) * sizeof(char));
+             if(!session->online_id)
+             {
+                 CHIAKI_LOGE(session->log, "chiaki_holepunch_session_create: could not allocate space for PSN online id string.");
+                 err = CHIAKI_ERR_MEMORY;
+-                return err;
++                break;
+             }
+             strcpy(session->online_id, online_id);
+         }
+@@ -1075,7 +1075,7 @@
+         {
+             CHIAKI_LOGE(session->log, "chiaki_holepunch_session_create: Got unexpected notification of type %d", notif->type);
+             err = CHIAKI_ERR_UNKNOWN;
+-            return err;
++            break;
+         }
+         chiaki_mutex_lock(&session->stop_mutex);
+         if(session->main_should_stop)
+@@ -1084,13 +1084,20 @@
+             chiaki_mutex_unlock(&session->stop_mutex);
+             CHIAKI_LOGI(session->log, "chiaki_holepunch_session_create: canceled");
+             err = CHIAKI_ERR_CANCELED;
+-            return err;
++            break;
+         }
+         chiaki_mutex_unlock(&session->stop_mutex);
+         http_check_session(session, true);
+         log_session_state(session);
+         finished = (session->state & SESSION_STATE_CREATED) &&
+                         (session->state & SESSION_STATE_CLIENT_JOINED);
++        chiaki_mutex_unlock(&session->state_mutex);
++        clear_notification(session, notif);
++    }
++    if (!finished)
++    {
++        // Left the loop through a break (error or cancel): state_mutex is still held
++        // and notif not yet cleared.
+         chiaki_mutex_unlock(&session->state_mutex);
+         clear_notification(session, notif);
+     }
+@@ -1202,7 +1209,7 @@
+             }
+ 
+             uint8_t duid_bytes[32];
+-            ChiakiErrorCode err = hex_to_bytes(member_duid, duid_bytes, sizeof(duid_bytes));
++            err = hex_to_bytes(member_duid, duid_bytes, sizeof(duid_bytes));
+             if(err != CHIAKI_ERR_SUCCESS)
+             {
+                 CHIAKI_LOGE(session->log, "chiaki_holepunch_session_start: Could not convert member duid to bytes");
+@@ -1260,6 +1267,7 @@
+             session->main_should_stop = false;
+             chiaki_mutex_unlock(&session->stop_mutex);
+             CHIAKI_LOGI(session->log, "chiaki_holepunch_session_start: canceled");
++            chiaki_mutex_unlock(&session->state_mutex);
+             err = CHIAKI_ERR_CANCELED;
+             return err;
+         }
+@@ -1270,7 +1278,13 @@
+         log_session_state(session);
+         chiaki_mutex_unlock(&session->state_mutex);
+     }
+-    chiaki_mutex_unlock(&session->state_mutex);
++    if (!finished)
++    {
++        // Left the loop through a break: state_mutex is still held and notif not yet
++        // cleared. (When finished, the loop has already released the lock.)
++        chiaki_mutex_unlock(&session->state_mutex);
++        clear_notification(session, notif);
++    }
+     return err;
+ }
+ 

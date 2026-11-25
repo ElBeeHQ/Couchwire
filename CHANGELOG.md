@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.7: Cleaner cancels over the internet
+
+*Not released yet*
+
+Cancelling an internet connect no longer leaves part of it running in the background, and the code behind it gets a tidy.
+
+### Fixed
+
+- **Cancelling an internet connect cleans up fully.** If you cancelled, or Couchwire asked your PS5 again, at the very moment the PS5 answered over PlayStation Network, the connection being set up couldn't be closed and stayed in memory until you quit. It's now closed like any other. The fix is in chiaki-ng, the Remote Play library Couchwire is built on.
+- **Unexpected replies from PlayStation Network are handled the same way.** In the same library, an unexpected or malformed reply while setting up the connection also left it impossible to close, and one kind was even reported as success.
+- **Your console's name stays out of the Mac's log** when a connect fails, finishing a change from 0.2.6.
+
 ## v0.2.6: Game volume, and a steadier app
 
 *25 November 2026*
