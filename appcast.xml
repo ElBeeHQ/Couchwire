@@ -3,6 +3,28 @@
     <channel>
         <title>Couchwire</title>
         <item>
+            <title>0.2.7</title>
+            <pubDate>Wed, 25 Nov 2026 21:25:07 +0000</pubDate>
+            <link>https://github.com/ElBeeHQ/Couchwire</link>
+            <sparkle:version>0.2.7</sparkle:version>
+            <sparkle:shortVersionString>0.2.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.7: Cleaner cancels over the internet
+
+*25 November 2026*
+
+Cancelling an internet connect no longer leaves part of it running in the background, and the code behind it gets a tidy.
+
+### Fixed
+
+- **Cancelling an internet connect cleans up fully.** If you cancelled, or Couchwire asked your PS5 again, at the very moment the PS5 answered over PlayStation Network, the connection being set up couldn't be closed and stayed in memory until you quit. It's now closed like any other. The fix is in chiaki-ng, the Remote Play library Couchwire is built on.
+- **Unexpected replies from PlayStation Network are handled the same way.** In the same library, an unexpected or malformed reply while setting up the connection also left it impossible to close, and one kind was even reported as success.
+- **Your console's name stays out of the Mac's log** when a connect fails, finishing a change from 0.2.6.
+]]></description>
+            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.7/Couchwire-0.2.7.dmg" length="7182770" type="application/octet-stream" sparkle:edSignature="qvE3pTOvc7fGIxReO8kLNk7ZXR4wYq60/9h1prbGs6pdMx9qgS+eA2ie6+Ss4YQ0P36XM+m9a0YRoGsRisafCg=="/>
+        </item>
+        <item>
             <title>0.2.6</title>
             <pubDate>Wed, 25 Nov 2026 17:42:42 +0000</pubDate>
             <link>https://github.com/ElBeeHQ/Couchwire</link>
@@ -68,40 +90,6 @@ At home, a short Wi-Fi stall no longer leaves the picture soft for the rest of t
 **Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.5-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.5-dependencies-source.tar` holds the exact sources of the libraries it's built with.
 ]]></description>
             <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.5/Couchwire-0.2.5.dmg" length="7158395" type="application/octet-stream" sparkle:edSignature="skEuoBfzL6HXU4KhK93B2lVeIyPu/WverEfOYIzPFwJhTTyuZr+t8SbleMn0wMti75+k7SK/XANe01MjGsZZDw=="/>
-        </item>
-        <item>
-            <title>0.2.4</title>
-            <pubDate>Mon, 23 Nov 2026 22:00:11 +0000</pubDate>
-            <link>https://github.com/ElBeeHQ/Couchwire</link>
-            <sparkle:version>0.2.4</sparkle:version>
-            <sparkle:shortVersionString>0.2.4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description sparkle:format="markdown"><![CDATA[# Couchwire 0.2.4: Rumble that feels right, and quicker reconnects
-
-*23 November 2026*
-
-Vibration and trigger effects follow your PS5 more closely, full DualSense haptics start when you plug in a cable mid-game, and Couchwire gets back to your game faster after a network change.
-
-### Changed
-
-- **Vibration follows your PS5's settings.** Couchwire now uses the PS5's Vibration Intensity and Trigger Effect Intensity settings. Weak and Medium soften the rumble and the triggers, and Off turns them off.
-- **Gentler rumble over Bluetooth.** Over Bluetooth the controller can't play the PS5's haptics directly, so Couchwire turns them into rumble. That rumble is now less heavy-handed, ignores very faint signals and never falls behind the game.
-- **Quicker reconnects.** After a network change, or when you close a stream and press Play again, the PS5 takes a few seconds to let go of the old stream. Couchwire now asks again every second while it waits, and says it's waiting, instead of showing "already in use". Back on your home network it reconnects as soon as it finds the PS5.
-- **The struggling banner goes away** once the stream recovers, and comes back only if it gets bad again.
-
-### Fixed
-
-- **Full haptics over USB mid-game.** Plugging the controller in with a cable during a stream now switches to the DualSense's full haptics within a second or two. Before, it stayed on Bluetooth-style rumble until the next stream.
-- **Trigger effects no longer restart by themselves.** Couchwire re-sent them every second, which could restart a vibrating trigger effect or click a weapon trigger again.
-- **Moving from home Wi-Fi to a hotspot** goes over the internet straight away, instead of trying the home address again first.
-- **A reconnect no longer lowers your quality.** The first 30 seconds after a network change, while the Wi-Fi settles, no longer count towards automatic quality or bring up the struggling banner.
-
-**Update:** Couchwire 0.1.0 and later offer this update by themselves; or choose **Couchwire › Check for Updates…**. New here? Download `Couchwire-0.2.4.dmg`, open it, and drag Couchwire onto Applications. Needs macOS 14 or later on Apple silicon. The app is not notarised, so the first time macOS may say it cannot verify it: open System Settings > Privacy & Security, scroll to the message about Couchwire and click **Open Anyway**.
-
-**Source:** Couchwire is free software under the GNU AGPL v3. `Couchwire-0.2.4-source.tar.gz` is the source of this release, including chiaki-ng, and `Couchwire-0.2.4-dependencies-source.tar` holds the exact sources of the libraries it's built with.
-]]></description>
-            <enclosure url="https://github.com/ElBeeHQ/Couchwire/releases/download/v0.2.4/Couchwire-0.2.4.dmg" length="7132672" type="application/octet-stream" sparkle:edSignature="rquyAEMX+gF5Z+BUm2G1UDuXvp8sy1UT8i3tKV5npyTmTfwLfmX0bsHeOLMlXgH/fTMe6THAP8LNoy/ySRG0BQ=="/>
         </item>
     </channel>
 </rss>
