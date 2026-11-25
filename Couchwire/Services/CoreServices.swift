@@ -5,14 +5,37 @@ private let coreLog = Logger(subsystem: "Couchwire", category: "Core")
 
 func logFromCore(_ level: Int32, _ msg: UnsafePointer<CChar>?) {
 	guard let msg else { return }
-	let s = String(cString: msg)
+	let raw = String(cString: msg)
+	switch level {
+	case Int32(CW_LOG_ERROR.rawValue), Int32(CW_LOG_WARNING.rawValue): break
+	default:
+		// Info level isn't stored, so it stays as it was (readable with `log stream --level info`).
+		if !keepCoreLog { coreLog.info("\(raw, privacy: .public)"); return }
+	}
+	// These lines are kept, so network addresses in them are hidden. The rest stays readable,
+	// so a slow or failed connect can still be looked into.
+	let s = maskAddresses(raw)
 	switch level {
 	case Int32(CW_LOG_ERROR.rawValue): coreLog.error("\(s, privacy: .public)")
 	case Int32(CW_LOG_WARNING.rawValue): coreLog.warning("\(s, privacy: .public)")
 	default:
 		// Kept (notice) while an internet connection is being set up, so slow ones can be looked into.
-		if keepCoreLog { coreLog.notice("\(s, privacy: .public)") } else { coreLog.info("\(s, privacy: .public)") }
+		coreLog.notice("\(s, privacy: .public)")
 	}
+}
+
+private let ipv4 = try! NSRegularExpression(pattern: #"\b(?:\d{1,3}\.){3}\d{1,3}\b"#)
+/// Three or more colon-separated hex groups: IPv6 addresses (and MAC addresses).
+private let ipv6 = try! NSRegularExpression(pattern: #"(?<![0-9A-Za-z:])(?:[0-9A-Fa-f]{0,4}:){3,7}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"#)
+
+/// Replaces IPv4, IPv6 and MAC addresses with "<address>".
+func maskAddresses(_ s: String) -> String {
+	guard s.contains(".") || s.contains(":") else { return s }
+	var out = s
+	for re in [ipv4, ipv6] {
+		out = re.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: "<address>")
+	}
+	return out
 }
 
 /// On while an internet connection is being set up. A plain flag: an off-by-one log line doesn't matter.
@@ -80,7 +103,11 @@ struct RegistrationResult: Sendable {
 
 /// Pairs this Mac with a console. One-shot; await `register`.
 final class RegistrationService: @unchecked Sendable {
+	/// Guards `handle` and `finished`: the result can arrive on chiaki's thread before
+	/// `cw_regist_start` has returned the handle.
+	private let lock = NSLock()
 	private var handle: OpaquePointer?
+	private var finished = false
 	private var continuation: CheckedContinuation<RegistrationResult, Error>?
 
 	func register(address: String, accountID: String, pin: String, ps5: Bool) async throws -> RegistrationResult {
@@ -100,7 +127,17 @@ final class RegistrationService: @unchecked Sendable {
 				}, cLog, ctx)
 			}
 			if let started {
-				handle = started
+				lock.lock()
+				if finished {
+					// Already done: `finish` had no handle to free.
+					lock.unlock()
+					// Passed as a plain number: a C pointer isn't Sendable.
+					let bits = UInt(bitPattern: started)
+					DispatchQueue.global().async { cw_regist_free(OpaquePointer(bitPattern: bits)) }
+				} else {
+					handle = started
+					lock.unlock()
+				}
 			} else {
 				Unmanaged<RegistrationService>.fromOpaque(ctx).release()
 				continuation = nil
@@ -110,7 +147,9 @@ final class RegistrationService: @unchecked Sendable {
 	}
 
 	func cancel() {
-		cw_regist_cancel(handle)
+		lock.lock()
+		defer { lock.unlock() }
+		cw_regist_cancel(handle) // only signals the thread; doesn't block
 	}
 
 	private func finish(_ r: CWRegistResult) {
@@ -118,9 +157,12 @@ final class RegistrationService: @unchecked Sendable {
 		let cont = continuation
 		continuation = nil
 		// Free off the callback thread (free joins it).
+		lock.lock()
 		let h = handle
 		handle = nil
-		DispatchQueue.global().async { cw_regist_free(h) }
+		finished = true
+		lock.unlock()
+		if let h { DispatchQueue.global().async { cw_regist_free(h) } }
 
 		guard r.success else {
 			cont?.resume(throwing: RegistrationError.rejected)

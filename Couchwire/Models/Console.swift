@@ -120,14 +120,24 @@ func cString<T>(_ tuple: inout T) -> String {
 }
 
 extension Data {
+	/// Bytes from a hex string (either case), or nil if it isn't one: an odd length or any
+	/// character that isn't 0–9, a–f or A–F.
 	init?(hexString: String) {
 		let chars = Array(hexString.utf8)
 		guard chars.count % 2 == 0 else { return nil }
+		func nibble(_ c: UInt8) -> UInt8? {
+			switch c {
+			case UInt8(ascii: "0")...UInt8(ascii: "9"): c - UInt8(ascii: "0")
+			case UInt8(ascii: "a")...UInt8(ascii: "f"): c - UInt8(ascii: "a") + 10
+			case UInt8(ascii: "A")...UInt8(ascii: "F"): c - UInt8(ascii: "A") + 10
+			default: nil
+			}
+		}
 		var bytes: [UInt8] = []
 		bytes.reserveCapacity(chars.count / 2)
 		for i in stride(from: 0, to: chars.count, by: 2) {
-			guard let b = UInt8(String(decoding: chars[i...i + 1], as: UTF8.self), radix: 16) else { return nil }
-			bytes.append(b)
+			guard let hi = nibble(chars[i]), let lo = nibble(chars[i + 1]) else { return nil }
+			bytes.append(hi << 4 | lo)
 		}
 		self.init(bytes)
 	}

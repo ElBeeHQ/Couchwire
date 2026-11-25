@@ -25,7 +25,8 @@ final class VideoDecoder: @unchecked Sendable {
 	private var waitingForKeyframe = true
 	private let log = Logger(subsystem: "Couchwire", category: "Video")
 	/// Whether the first frame after a format change has been checked for HDR, for the log.
-	private var checkedFrame = false
+	/// Cleared on the receive thread, read on VideoToolbox's.
+	private let checkedFrame = OSAllocatedUnfairLock(initialState: false)
 	/// Called when the decoder needs a fresh keyframe (e.g. after a decode failure).
 	var requestKeyframe: (() -> Void)?
 	/// When set, frames are timed to play out evenly instead of shown the moment they decode.
@@ -41,6 +42,8 @@ final class VideoDecoder: @unchecked Sendable {
 	}
 
 	deinit {
+		// No wait here: the last release can happen inside an output callback of this very session,
+		// and waiting for its frames from there could hang. Callbacks still in flight see a nil self.
 		if let session { VTDecompressionSessionInvalidate(session) }
 	}
 
@@ -52,14 +55,18 @@ final class VideoDecoder: @unchecked Sendable {
 			return recover()
 		}
 
-		var payload = Data()
+		// Parameter sets are copied out (they're tiny and kept); frame NAL units are copied once,
+		// straight into the sample's block buffer.
+		var frameNALs: [Range<Int>] = []
+		var payloadLength = 0
 		var sawParameterSet = false
 		var isKeyframe = false
 
-		for nalu in Self.splitAnnexB(data) where !nalu.isEmpty {
-			let type = nalType(nalu.first!)
+		for range in Self.nalRanges(data) {
+			let type = nalType(data[range.lowerBound])
 			switch (codec, type) {
 			case (.h264, 7), (.h264, 8), (.hevc, 32), (.hevc, 33), (.hevc, 34):
+				let nalu = Data(UnsafeBufferPointer(rebasing: data[range]))
 				if parameterSets[type] != nalu {
 					parameterSets[type] = nalu
 					sawParameterSet = true
@@ -68,10 +75,8 @@ final class VideoDecoder: @unchecked Sendable {
 				if (codec == .h264 && type == 5) || (codec == .hevc && (16...21).contains(type)) {
 					isKeyframe = true
 				}
-				// AVCC/HVCC framing: 4-byte big-endian length prefix.
-				var len = UInt32(nalu.count).bigEndian
-				payload.append(Data(bytes: &len, count: 4))
-				payload.append(nalu)
+				frameNALs.append(range)
+				payloadLength += 4 + range.count
 			}
 		}
 
@@ -82,13 +87,13 @@ final class VideoDecoder: @unchecked Sendable {
 				if changed || session == nil { makeSession(desc) }
 			}
 		}
-		guard let formatDescription, let session, !payload.isEmpty else { return true }
+		guard let formatDescription, let session, payloadLength > 0 else { return true }
 		if waitingForKeyframe {
 			guard isKeyframe else { return true }
 			waitingForKeyframe = false
 		}
 
-		guard let sample = makeSampleBuffer(payload, format: formatDescription) else { return false }
+		guard let sample = makeSampleBuffer(data, nals: frameNALs, length: payloadLength, format: formatDescription) else { return false }
 
 		let submitted = CACurrentMediaTime()
 		let status = VTDecompressionSessionDecodeFrame(
@@ -107,15 +112,6 @@ final class VideoDecoder: @unchecked Sendable {
 		return true
 	}
 
-	func reset() {
-		renderer.flush()
-		if let session { VTDecompressionSessionInvalidate(session) }
-		session = nil
-		formatDescription = nil
-		parameterSets.removeAll()
-		waitingForKeyframe = true
-	}
-
 	// MARK: - Decode output (VideoToolbox thread)
 
 	private func didDecode(status: OSStatus, imageBuffer: CVImageBuffer?, pts: CMTime, submitted: CFTimeInterval) {
@@ -129,10 +125,11 @@ final class VideoDecoder: @unchecked Sendable {
 			return
 		}
 		stats.frameDecoded(submittedAt: submitted, decodedAt: decodedAt)
-		if !checkedFrame {
-			checkedFrame = true
-			logFrame(imageBuffer)
+		let firstFrame = checkedFrame.withLock { checked in
+			defer { checked = true }
+			return !checked
 		}
+		if firstFrame { logFrame(imageBuffer) }
 
 		var format: CMVideoFormatDescription?
 		guard CMVideoFormatDescriptionCreateForImageBuffer(
@@ -179,7 +176,7 @@ final class VideoDecoder: @unchecked Sendable {
 			|| transfer == (kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
 		stats.setDynamicRange(isHDR ? (transfer.contains("2084") ? "HDR10" : "HLG") : "SDR")
 		log.notice("Video format: \(dims.width)x\(dims.height), \(isHDR ? "HDR" : "SDR", privacy: .public) (transfer \(transfer, privacy: .public), primaries \(primaries, privacy: .public)), asked for HDR: \(self.hdr)")
-		checkedFrame = false
+		checkedFrame.withLock { $0 = false }
 
 		let spec: [CFString: Any] = [
 			kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder: true,
@@ -249,17 +246,20 @@ final class VideoDecoder: @unchecked Sendable {
 		return desc
 	}
 
-	private func makeSampleBuffer(_ payload: Data, format: CMVideoFormatDescription) -> CMSampleBuffer? {
+	/// Builds the sample in AVCC/HVCC framing (a 4-byte big-endian length before each NAL unit),
+	/// copying each NAL unit once, straight from libchiaki's buffer.
+	private func makeSampleBuffer(_ data: UnsafeBufferPointer<UInt8>, nals: [Range<Int>], length: Int, format: CMVideoFormatDescription) -> CMSampleBuffer? {
+		guard let memory = malloc(length) else { return nil }
+		Self.packAVCC(data, nals: nals, into: UnsafeMutableRawBufferPointer(start: memory, count: length))
 		var block: CMBlockBuffer?
-		let length = payload.count
+		// kCFAllocatorMalloc frees `memory` with the block buffer.
 		guard CMBlockBufferCreateWithMemoryBlock(
-			allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: length,
-			blockAllocator: kCFAllocatorDefault, customBlockSource: nil, offsetToData: 0,
-			dataLength: length, flags: 0, blockBufferOut: &block) == noErr, let block else { return nil }
-		let copied = payload.withUnsafeBytes { raw in
-			CMBlockBufferReplaceDataBytes(with: raw.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: length)
+			allocator: kCFAllocatorDefault, memoryBlock: memory, blockLength: length,
+			blockAllocator: kCFAllocatorMalloc, customBlockSource: nil, offsetToData: 0,
+			dataLength: length, flags: 0, blockBufferOut: &block) == noErr, let block else {
+			free(memory)
+			return nil
 		}
-		guard copied == noErr else { return nil }
 
 		var sample: CMSampleBuffer?
 		var sampleSize = length
@@ -281,29 +281,45 @@ final class VideoDecoder: @unchecked Sendable {
 							 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
 	}
 
-	/// Splits an Annex-B byte stream on 3- or 4-byte start codes.
-	static func splitAnnexB(_ buf: UnsafeBufferPointer<UInt8>) -> [Data] {
-		var result: [Data] = []
+	/// The NAL units of an Annex-B byte stream, split on 3- or 4-byte start codes, as ranges
+	/// into `buf` (empty units are left out).
+	static func nalRanges(_ buf: UnsafeBufferPointer<UInt8>) -> [Range<Int>] {
+		var result: [Range<Int>] = []
+		guard let base = buf.baseAddress else { return result }
 		let n = buf.count
-		var i = 0
 		var start = -1
-		while i + 2 < n {
-			if buf[i] == 0, buf[i + 1] == 0, buf[i + 2] == 1 {
+		// Look for each 0x01 with memchr (much faster than a byte loop), then check the two
+		// zeros before it. `j` is the index of the 01 in a 00 00 01 start code.
+		var j = 2
+		while j < n, let p = memchr(base + j, 1, n - j) {
+			j = base.distance(to: p.assumingMemoryBound(to: UInt8.self))
+			if base[j - 1] == 0, base[j - 2] == 0 {
 				if start >= 0 {
-					var end = i
-					if end > start, buf[end - 1] == 0 { end -= 1 } // 4-byte start code
-					result.append(Data(buf[start..<end]))
+					var end = j - 2
+					if end > start, base[end - 1] == 0 { end -= 1 } // 4-byte start code
+					if end > start { result.append(start..<end) }
 				}
-				i += 3
-				start = i
-			} else {
-				i += 1
+				start = j + 1
 			}
+			j += 1
 		}
 		if start >= 0, start < n {
-			result.append(Data(buf[start..<n]))
+			result.append(start..<n)
 		}
 		return result
+	}
+
+	/// Writes `nals` from `data` into `out` with a 4-byte big-endian length before each.
+	/// `out` must hold exactly 4 + count bytes per unit.
+	static func packAVCC(_ data: UnsafeBufferPointer<UInt8>, nals: [Range<Int>], into out: UnsafeMutableRawBufferPointer) {
+		var offset = 0
+		for range in nals {
+			out.storeBytes(of: UInt32(range.count).bigEndian, toByteOffset: offset, as: UInt32.self)
+			offset += 4
+			UnsafeMutableRawBufferPointer(rebasing: out[offset..<offset + range.count])
+				.copyMemory(from: UnsafeRawBufferPointer(UnsafeBufferPointer(rebasing: data[range])))
+			offset += range.count
+		}
 	}
 }
 

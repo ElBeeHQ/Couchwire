@@ -42,7 +42,7 @@ final class ConsolePinger: @unchecked Sendable {
 		dest.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
 		dest.sin_family = sa_family_t(AF_INET)
 		guard inet_pton(AF_INET, address, &dest.sin_addr) == 1 else {
-			log.error("Ping: \(self.address, privacy: .public) is not an IPv4 address")
+			log.error("Ping: \(self.address, privacy: .private) is not an IPv4 address")
 			return
 		}
 		let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_ICMP)

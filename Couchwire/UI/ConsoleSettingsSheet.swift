@@ -10,6 +10,10 @@ struct ConsoleSettingsSheet: View {
 
 	var body: some View {
 		VStack(alignment: .leading, spacing: 0) {
+			// A sheet shows no navigation title on macOS, so name the console here.
+			Text("\(console.nickname) Settings")
+				.font(.title3.weight(.semibold))
+				.padding([.horizontal, .top], 20)
 			Form {
 				Section {
 					Toggle("Use Custom Stream Settings", isOn: Binding(

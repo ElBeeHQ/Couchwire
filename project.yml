@@ -25,6 +25,9 @@ targets:
       - path: Couchwire
     dependencies:
       - package: Sparkle
+    scheme:
+      testTargets:
+        - CouchwireTests
     preBuildScripts:
       - name: Build libchiaki
         script: |
@@ -65,3 +68,24 @@ targets:
           - -framework Security
         GCC_OPTIMIZATION_LEVEL: "3"
         SWIFT_OPTIMIZATION_LEVEL: -O
+
+  # Unit tests for the pure logic (pacing, audio rings, the quality ladder, parsing).
+  # Hosted in the app, which starts nothing when it sees XCTest (see Launcher).
+  CouchwireTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: CouchwireTests
+    dependencies:
+      - target: Couchwire
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.elbeehq.couchwire.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Couchwire.app/Contents/MacOS/Couchwire
+        BUNDLE_LOADER: $(TEST_HOST)
+        HEADER_SEARCH_PATHS:
+          - $(PROJECT_DIR)/Vendor/chiaki-ng/lib/include
+          - $(PROJECT_DIR)/build/chiaki/lib/include

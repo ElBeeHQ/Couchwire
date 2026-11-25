@@ -594,44 +594,53 @@ final class DualSenseUSBHaptics: @unchecked Sendable {
 }
 
 /// SPSC stereo float ring with a small fixed latency target (~10 ms) for the voice coils.
+/// Lock-free, like `PCMRingBuffer`: the real-time reader never waits on the writer.
 final class StereoFloatRing: @unchecked Sendable {
-	private var storage: [Float]
-	private var readIndex = 0
-	private var count = 0 // in floats (2 per frame)
-	private var lock = os_unfair_lock()
-	private var primed = false
+	private let storage: UnsafeMutablePointer<Float>
+	private let capacity: Int // in floats (2 per frame)
+	/// Floats ever written (stored by the writer only) and ever read (by the reader only).
+	private let shared: UnsafeMutablePointer<Int64>
+	private var primed = false // reader only
 	private let target = 480 * 2 // 10 ms at 48 kHz
 
 	init(capacity frames: Int) {
-		storage = [Float](repeating: 0, count: frames * 2)
+		capacity = frames * 2
+		storage = .allocate(capacity: capacity)
+		storage.initialize(repeating: 0, count: capacity)
+		shared = .allocate(capacity: 2)
+		shared.initialize(repeating: 0, count: 2)
 	}
 
+	deinit {
+		storage.deallocate()
+		shared.deallocate()
+	}
+
+	/// If the ring is full the newest frames are dropped; the reader catches up by skipping.
 	func write(_ samples: UnsafeBufferPointer<Float>) {
-		os_unfair_lock_lock(&lock)
-		defer { os_unfair_lock_unlock(&lock) }
-		let cap = storage.count
-		for s in samples {
-			if count == cap { readIndex = (readIndex + 2) % cap; count -= 2 } // drop a whole frame
-			storage[(readIndex + count) % cap] = s
-			count += 1
-		}
-		if count > target * 4 { // stay live: drop to target if we fell behind
-			let drop = (count - target) & ~1
-			readIndex = (readIndex + drop) % cap
-			count -= drop
-		}
+		let written = Int(shared[0])
+		let count = written - Int(cw_atomic_load(shared + 1))
+		let n = min(samples.count, capacity - count) & ~1 // whole frames
+		guard n > 0 else { return }
+		for i in 0..<n { storage[(written + i) % capacity] = samples[i] }
+		cw_atomic_store(shared, Int64(written + n))
 	}
 
 	func read(left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>, frames: Int) {
-		os_unfair_lock_lock(&lock)
-		defer { os_unfair_lock_unlock(&lock) }
+		var readIndex = Int(shared[1])
+		var count = Int(cw_atomic_load(shared)) - readIndex
+		if count > target * 4 { // stay live: drop to target if we fell behind
+			let drop = (count - target) & ~1
+			readIndex += drop
+			count -= drop
+		}
 		if !primed && count >= target { primed = true }
-		let cap = storage.count
+		let cap = capacity
 		for i in 0..<frames {
 			if primed && count >= 2 {
-				left[i] = storage[readIndex]
+				left[i] = storage[readIndex % cap]
 				right[i] = storage[(readIndex + 1) % cap]
-				readIndex = (readIndex + 2) % cap
+				readIndex += 2
 				count -= 2
 			} else {
 				primed = false
@@ -639,5 +648,6 @@ final class StereoFloatRing: @unchecked Sendable {
 				right[i] = 0
 			}
 		}
+		cw_atomic_store(shared + 1, Int64(readIndex))
 	}
 }

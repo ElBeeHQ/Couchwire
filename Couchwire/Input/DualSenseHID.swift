@@ -46,7 +46,13 @@ final class DualSenseHID: @unchecked Sendable {
 				Unmanaged<InputReports>.fromOpaque(ctx).takeUnretainedValue()
 					.handler(timeStamp, DualSenseHID.systemButtons(reportID: reportID, report: report, length: length))
 			}, context.toOpaque())
-			IOHIDDeviceSetCancelHandler(device) { context.release() }
+			// The device and manager are closed here, once IOKit has stopped calling back,
+			// not straight after the asynchronous cancel in deinit.
+			IOHIDDeviceSetCancelHandler(device) { [device, manager] in
+				context.release()
+				IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+				IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+			}
 			IOHIDDeviceActivate(device)
 		} else {
 			reports = nil
@@ -73,9 +79,13 @@ final class DualSenseHID: @unchecked Sendable {
 	}
 
 	deinit {
-		if reports != nil { IOHIDDeviceCancel(device) }
-		IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
-		IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+		if reports != nil {
+			// The cancel handler closes the device and manager after the last callback.
+			IOHIDDeviceCancel(device)
+		} else {
+			IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
+			IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+		}
 	}
 
 	/// Opens the first connected DualSense, or returns nil. `onInputReport` is called on the

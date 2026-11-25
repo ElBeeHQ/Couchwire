@@ -11,6 +11,8 @@ struct StreamWindowView: View {
 	@State private var window = StreamWindowState()
 	@State private var controlsVisible = false
 	@State private var hoveringControls = false
+	/// The strip's Sound popover is open: don't hide the strip under it.
+	@State private var soundOpen = false
 	@State private var hideTask: Task<Void, Never>?
 
 	var body: some View {
@@ -135,8 +137,10 @@ struct StreamWindowView: View {
 					endSession: {
 						model.endSession()
 						dismissWindow(id: "stream")
-					})
+					},
+					showingSound: $soundOpen)
 				.onHover { hoveringControls = $0; if !$0 { scheduleHide() } }
+				.onChange(of: soundOpen) { _, open in if !open { scheduleHide() } }
 				.padding(.top, controlsTop)
 				.transition(.move(edge: .top).combined(with: .opacity))
 			}
@@ -162,7 +166,7 @@ struct StreamWindowView: View {
 		hideTask = Task {
 			try? await Task.sleep(for: .seconds(2.5))
 			guard !Task.isCancelled else { return }
-			if !hoveringControls { controlsVisible = false }
+			if !hoveringControls, !soundOpen { controlsVisible = false }
 		}
 	}
 
@@ -196,12 +200,12 @@ struct StreamWindowView: View {
 							.font(.callout)
 							.foregroundStyle(.secondary)
 							.multilineTextAlignment(.center)
-						Button("Cancel") {
-							model.endSession()
-							dismissWindow(id: "stream")
-						}
-						.keyboardShortcut(.cancelAction)
 					}
+					Button("Cancel") {
+						model.endSession()
+						dismissWindow(id: "stream")
+					}
+					.keyboardShortcut(.cancelAction)
 				}
 			}
 		case .needsPIN(let incorrect):
@@ -267,9 +271,13 @@ private struct StrugglingBanner: View {
 				.buttonStyle(.borderedProminent)
 			Button(action: dismiss) {
 				Image(systemName: "xmark")
+					.padding(6)
+					.contentShape(Rectangle())
 			}
 			.buttonStyle(.borderless)
 			.help("Keep this quality")
+			.accessibilityLabel("Dismiss")
+			.accessibilityHint("Keep this quality")
 		}
 		.padding(16)
 		.frame(maxWidth: 560)
@@ -300,9 +308,13 @@ private struct SharpenBanner: View {
 				.buttonStyle(.borderedProminent)
 			Button(action: dismiss) {
 				Image(systemName: "xmark")
+					.padding(6)
+					.contentShape(Rectangle())
 			}
 			.buttonStyle(.borderless)
 			.help("Keep streaming as it is")
+			.accessibilityLabel("Dismiss")
+			.accessibilityHint("Keep streaming as it is")
 		}
 		.padding(16)
 		.frame(maxWidth: 560)
@@ -344,9 +356,13 @@ private struct PSButtonTip: View {
 					.buttonStyle(.borderedProminent)
 					Button(action: done) {
 						Image(systemName: "xmark")
+							.padding(6)
+							.contentShape(Rectangle())
 					}
 					.buttonStyle(.borderless)
 					.help("Don’t show this again")
+					.accessibilityLabel("Dismiss")
+					.accessibilityHint("Don’t show this again")
 				}
 				.padding(16)
 				.frame(maxWidth: 560)

@@ -101,8 +101,8 @@ final class AudioPlayer: @unchecked Sendable {
 }
 
 /// Single-producer/single-consumer interleaved Int16 ring buffer that de-interleaves to
-/// Float32 on read, with an adaptive reserve (jitter buffer). Guarded by an unfair lock;
-/// critical sections are tiny memcpy-like loops.
+/// Float32 on read, with an adaptive reserve (jitter buffer). Lock-free: the writer and the
+/// real-time reader share only two running sample counts, so the audio callback never waits.
 ///
 /// The reserve starts at `minimum` and grows by 20 ms each time it runs dry (a gap you'd hear),
 /// up to `maximum`. After 10 s without a gap it shrinks by 5 ms, back towards `minimum`. A backlog
@@ -112,14 +112,18 @@ final class AudioPlayer: @unchecked Sendable {
 /// instead, and works off anything over the reserve, so it's back to normal in about half a
 /// minute. While gaps keep coming it stays up, as before.
 final class PCMRingBuffer: @unchecked Sendable {
-	private var storage: [Int16]
-	private var readIndex = 0
-	/// Samples (not frames) buffered.
-	private var count = 0
+	private let storage: UnsafeMutablePointer<Int16>
+	private let capacity: Int
+	/// Shared counts (atomics): samples ever written, samples ever read, and for the stats panel
+	/// the reserve (frames) and gaps so far. Only the writer stores `written`; only the reader
+	/// stores the rest.
+	private let shared: UnsafeMutablePointer<Int64>
+	private static let written = 0, readCount = 1, targetShown = 2, gapsShown = 3
 	private let channels: Int
-	private var lock = os_unfair_lock()
-	private var primed = false
 
+	// Reader-only state from here on.
+	private var primed = false
+	private var readTotal = 0
 	private let minTarget: Int
 	private let maxTarget: Int
 	private let step: Int
@@ -142,7 +146,11 @@ final class PCMRingBuffer: @unchecked Sendable {
 	init(sampleRate: Double, channels: Int, minimum: TimeInterval, maximum: TimeInterval, fastRecovery: Bool = false) {
 		self.channels = channels
 		// Room for 1 s, far beyond the largest reserve.
-		storage = [Int16](repeating: 0, count: Int(sampleRate) * channels)
+		capacity = Int(sampleRate) * channels
+		storage = .allocate(capacity: capacity)
+		storage.initialize(repeating: 0, count: capacity)
+		shared = .allocate(capacity: 4)
+		shared.initialize(repeating: 0, count: 4)
 		minTarget = Int(sampleRate * minimum)
 		maxTarget = Int(sampleRate * maximum)
 		step = Int(sampleRate * 0.02)
@@ -153,41 +161,57 @@ final class PCMRingBuffer: @unchecked Sendable {
 		fastShrinkStep = Int(sampleRate * 0.01)
 		fastCalmFrames = Int(sampleRate * 3)
 		target = minTarget
+		cw_atomic_store(shared + Self.targetShown, Int64(target))
 	}
 
-	/// The reserve now, in ms, and how many gaps there have been.
+	deinit {
+		storage.deallocate()
+		shared.deallocate()
+	}
+
+	/// The reserve now, in ms, and how many gaps there have been. Any thread.
 	func status(sampleRate: Double) -> (bufferedMs: Double, targetMs: Double, gaps: Int) {
-		os_unfair_lock_lock(&lock)
-		defer { os_unfair_lock_unlock(&lock) }
-		return (Double(count / channels) / sampleRate * 1000, Double(target) / sampleRate * 1000, underrunsTotal)
+		let read = cw_atomic_load(shared + Self.readCount)
+		let count = Int(cw_atomic_load(shared + Self.written) - read)
+		let target = Int(cw_atomic_load(shared + Self.targetShown))
+		return (Double(count / channels) / sampleRate * 1000, Double(target) / sampleRate * 1000,
+				Int(cw_atomic_load(shared + Self.gapsShown)))
 	}
 
+	/// The producer (libchiaki's audio thread). If the ring is full, the newest whole frames are
+	/// dropped; the reader skips ahead once it's far behind, so that only happens after a long stall.
 	func write(_ samples: UnsafeBufferPointer<Int16>) {
-		os_unfair_lock_lock(&lock)
-		defer { os_unfair_lock_unlock(&lock) }
-		let cap = storage.count
-		for s in samples {
-			if count == cap { // overrun: drop oldest to stay live
-				readIndex = (readIndex + 1) % cap
-				count -= 1
-			}
-			storage[(readIndex + count) % cap] = s
-			count += 1
+		let written = Int(shared[Self.written]) // only this thread stores it
+		let count = written - Int(cw_atomic_load(shared + Self.readCount))
+		var n = min(samples.count, capacity - count)
+		n -= n % channels
+		guard n > 0 else { return }
+		for i in 0..<n {
+			storage[(written + i) % capacity] = samples[i]
+		}
+		cw_atomic_store(shared + Self.written, Int64(written + n))
+	}
+
+	/// The consumer: the real-time render callback. Never blocks.
+	func read(into abl: UnsafeMutableAudioBufferListPointer, frames: Int) {
+		let cap = capacity
+		var readIndex = readTotal
+		var count = Int(cw_atomic_load(shared + Self.written)) - readIndex
+		// Full: playback stalled and the writer has been dropping the newest sound, so what's here is
+		// stale. Throw it all away and rebuild the reserve from live sound.
+		if count >= capacity - channels {
+			readIndex += count
+			count = 0
 		}
 		// Hopelessly behind (a long stall, then everything at once): skip to the reserve rather
 		// than play seconds late.
-		let frames = count / channels
-		if frames > target + maxTarget * 2 {
-			let drop = (frames - target) * channels
-			readIndex = (readIndex + drop) % cap
+		if count / channels > target + maxTarget * 2 {
+			let drop = (count / channels - target) * channels
+			readIndex += drop
 			count -= drop
 		}
-	}
-
-	func read(into abl: UnsafeMutableAudioBufferListPointer, frames: Int) {
-		os_unfair_lock_lock(&lock)
-		defer { os_unfair_lock_unlock(&lock) }
-		let cap = storage.count
+		let gapsBefore = underrunsTotal
+		let targetBefore = target
 		for frame in 0..<frames {
 			// Fast recovery only once there's been no gap for a while.
 			let settled = fastRecovery && framesPlayed - lastGap > settledFrames
@@ -203,14 +227,14 @@ final class PCMRingBuffer: @unchecked Sendable {
 					abl[ch].mData!.assumingMemoryBound(to: Float.self)[frame] =
 						Float(storage[(readIndex + ch) % cap]) / 32768.0 * gain
 				}
-				readIndex = (readIndex + channels) % cap
+				readIndex += channels
 				count -= channels
 				// Well over the reserve: drop one frame in 50 to catch up gently.
 				if count / channels > (settled ? target + step : target * 2 + step) {
 					skipPhase += 1
 					if skipPhase >= 50, count >= channels {
 						skipPhase = 0
-						readIndex = (readIndex + channels) % cap
+						readIndex += channels
 						count -= channels
 					}
 				}
@@ -233,5 +257,9 @@ final class PCMRingBuffer: @unchecked Sendable {
 				lastChange = framesPlayed
 			}
 		}
+		readTotal = readIndex
+		cw_atomic_store(shared + Self.readCount, Int64(readIndex))
+		if target != targetBefore { cw_atomic_store(shared + Self.targetShown, Int64(target)) }
+		if underrunsTotal != gapsBefore { cw_atomic_store(shared + Self.gapsShown, Int64(underrunsTotal)) }
 	}
 }

@@ -9,13 +9,16 @@ struct StreamControls: View {
 	let isFullScreen: Bool
 	let toggleFullScreen: () -> Void
 	let endSession: () -> Void
+	/// The Sound popover is open; the window keeps the strip up meanwhile.
+	@Binding var showingSound: Bool
 	@State private var confirmingSleep = false
 
 	var body: some View {
 		HStack(spacing: 6) {
 			// Status: which console, how responsive it feels right now, controller charge.
 			HStack(spacing: 10) {
-				Circle().fill(latencyColor).frame(width: 9, height: 9)
+				Circle().fill(LatencyRating(ms: session.stats.observedMs).color).frame(width: 9, height: 9)
+					.accessibilityLabel("Responsiveness: \(LatencyRating(ms: session.stats.observedMs).label)")
 				VStack(alignment: .leading, spacing: 1) {
 					Text(session.console.nickname).font(.system(size: 13, weight: .semibold))
 					Text(statusLine).font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
@@ -36,6 +39,13 @@ struct StreamControls: View {
 				   help: session.micProblem ?? (session.micOn ? "Stop sending your voice to the PS5 (⌃⌘M)" : "Talk in game and party chat (⌃⌘M)"),
 				   highlighted: session.micOn) {
 				session.toggleMicrophone()
+			}
+			action(soundSymbol, session.soundMuted ? "Muted" : "Sound",
+				   help: "Game sound volume, or mute it (⌃⌘S mutes)", highlighted: session.soundMuted) {
+				showingSound.toggle()
+			}
+			.popover(isPresented: $showingSound, arrowEdge: .bottom) {
+				SoundPopover(session: session)
 			}
 			action(isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
 				   isFullScreen ? "Exit Full Screen" : "Full Screen",
@@ -59,18 +69,14 @@ struct StreamControls: View {
 		}
 	}
 
+	private var soundSymbol: String {
+		if session.soundMuted || session.volume == 0 { return "speaker.slash.fill" }
+		return session.volume < 0.34 ? "speaker.wave.1.fill" : session.volume < 0.67 ? "speaker.wave.2.fill" : "speaker.wave.3.fill"
+	}
+
 	private var statusLine: String {
 		let ms = session.stats.observedMs
 		return ms > 0 ? String(format: "%.0f ms button to screen", ms) : "Measuring…"
-	}
-
-	private var latencyColor: Color {
-		switch session.stats.observedMs {
-		case 0: .gray
-		case ..<25: .green
-		case ..<40: .yellow
-		default: .red
-		}
 	}
 
 	/// A labelled toolbar-style button: icon over a short caption, like a Mac toolbar.
@@ -95,6 +101,30 @@ struct StreamControls: View {
 		.help(help)
 		.accessibilityLabel(title)
 		.accessibilityHint(help)
+	}
+}
+
+/// Game sound: a volume slider and a mute switch. The PS5's own volume is separate.
+private struct SoundPopover: View {
+	@Bindable var session: StreamSession
+
+	var body: some View {
+		VStack(alignment: .leading, spacing: 10) {
+			Text("Game Sound").font(.headline)
+			HStack(spacing: 8) {
+				Image(systemName: "speaker.fill").foregroundStyle(.secondary).accessibilityHidden(true)
+				Slider(value: $session.volume, in: 0...1)
+					.frame(width: 160)
+					.disabled(session.soundMuted)
+					.accessibilityLabel("Game volume")
+					.accessibilityValue("\(Int((session.volume * 100).rounded())) percent")
+				Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).accessibilityHidden(true)
+			}
+			Toggle("Mute", isOn: $session.soundMuted)
+				.toggleStyle(.switch)
+				.help("Silence the game on this Mac (⌃⌘S). Your microphone isn't affected.")
+		}
+		.padding(14)
 	}
 }
 

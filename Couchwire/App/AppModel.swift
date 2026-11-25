@@ -53,7 +53,13 @@ final class AppModel {
 	var controlsRequest = 0
 	/// Shows the first-run setup over the console list.
 	var showingOnboarding = false
-	private(set) var waking: Set<String> = []
+	/// Consoles being woken, counted, so a cancelled wake finishing late doesn't clear a newer one's flag.
+	private var wakers: [String: Int] = [:]
+	var waking: Set<String> { Set(wakers.keys) }
+	private func beginWaking(_ id: String) { wakers[id, default: 0] += 1 }
+	private func endWaking(_ id: String) {
+		if let n = wakers[id], n > 1 { wakers[id] = n - 1 } else { wakers[id] = nil }
+	}
 	/// Set while reconnecting after the stream was lost (the Mac changed network) or restarted at lower
 	/// quality. The stream window shows it in place of the frozen picture.
 	private(set) var reconnecting: RegisteredConsole?
@@ -246,8 +252,12 @@ final class AppModel {
 		}
 
 		let profile = profile(for: console.hostID)
-		let seen = discoveredState(of: console).map { "\($0.state) at \($0.address)" } ?? "not seen on this network"
-		StreamSession.timing.notice("Connect to \(console.nickname, privacy: .public): \(seen, privacy: .public)")
+		// The console's name and address stay private in the log; its state is enough to follow a connect.
+		if let seen = discoveredState(of: console) {
+			StreamSession.timing.notice("Connect to \(console.nickname, privacy: .private): \(String(describing: seen.state), privacy: .public) at \(seen.address, privacy: .private)")
+		} else {
+			StreamSession.timing.notice("Connect to \(console.nickname, privacy: .private): not seen on this network")
+		}
 		// Over the internet when the console can't be seen here. A console still listed from the network
 		// the Mac has just left doesn't count: its address isn't on this one.
 		let current = registered.first { $0.hostID == console.hostID } ?? console
@@ -264,17 +274,22 @@ final class AppModel {
 				lastError = "\(console.nickname) is in rest mode. Turn on “Wake from Rest Mode” in its settings, or switch it on with the controller."
 				return nil
 			}
-			waking.insert(console.hostID)
-			defer { waking.remove(console.hostID) }
+			beginWaking(console.hostID)
+			defer { endWaking(console.hostID) }
 			await wakeAndWait(console, keys: keys)
+			// Cancelled from the console's card while it was waking: stop quietly.
+			if Task.isCancelled { return nil }
 			guard discoveredState(of: console)?.state == .ready else {
 				lastError = "\(console.nickname) didn’t wake up. Make sure “Enable Turning On PS5 from Network” is on in Settings › System › Power Saving."
 				return nil
 			}
 			// A PS5 reports "ready" a few seconds before Remote Play will accept a session.
 			try? await Task.sleep(for: .seconds(3))
+			if Task.isCancelled { return nil }
 		}
 
+		// Cancelled, or another session started while this one woke its console: don't take over.
+		guard !Task.isCancelled, session == nil else { return nil }
 		let s = makeSession(console, keys: keys, ceiling: profile.customStream ?? settings, retries: 3)
 		session = s
 		s.start()
@@ -295,7 +310,7 @@ final class AppModel {
 			await refreshPSNDevices()
 		}
 		let current = registered.first { $0.hostID == console.hostID } ?? console
-		guard let hex = current.psnDeviceID, let deviceID = Data(hex: hex), deviceID.count == 32 else {
+		guard let hex = current.psnDeviceID, let deviceID = Data(hexString: hex), deviceID.count == 32 else {
 			lastError = "Couldn’t find \(console.nickname) on your PlayStation Network account. Check it’s signed in to the same account, with Remote Play on, and that its name hasn’t changed since you paired it."
 			return nil
 		}
@@ -310,6 +325,12 @@ final class AppModel {
 							  internet: .init(accessToken: token, deviceID: deviceID, forcePortGuessing: forcePortGuessing,
 											  skipRouterSearch: link == .internetMobile, reaskConsole: reask))
 		s.onConnectionLost = { [weak self] in self?.streamLost($0) }
+		// Cancelled from the console's card while the token or device list was fetched, or another
+		// session started meanwhile: don't take over.
+		guard !Task.isCancelled, session == nil else {
+			s.stop()
+			return nil
+		}
 		session = s
 		s.start()
 		return s
@@ -383,10 +404,10 @@ final class AppModel {
 			lastError = "The pairing keys for \(console.nickname) are missing. Forget the console and pair it again."
 			return
 		}
-		waking.insert(console.hostID)
+		beginWaking(console.hostID)
 		Task {
 			await wakeAndWait(console, keys: keys)
-			waking.remove(console.hostID)
+			endWaking(console.hostID)
 		}
 	}
 
@@ -399,9 +420,13 @@ final class AppModel {
 			   tick == 0 || discoveredState(of: console)?.state == .standby {
 				let address = registered.first { $0.hostID == console.hostID }?.lastAddress ?? console.lastAddress
 				let sent = DiscoveryService.wake(address: address, keys: keys, ps5: console.isPS5)
-				StreamSession.timing.notice("Wake \(sent ? "sent" : "failed to send", privacy: .public) to \(address, privacy: .public) at \(Double(tick) / 2, privacy: .public) s")
+				StreamSession.timing.notice("Wake \(sent ? "sent" : "failed to send", privacy: .public) to \(address, privacy: .private) at \(Double(tick) / 2, privacy: .public) s")
 			}
 			try? await Task.sleep(for: .milliseconds(500))
+			if Task.isCancelled {
+				StreamSession.timing.notice("Waking cancelled")
+				return
+			}
 			if discoveredState(of: console)?.state == .ready {
 				StreamSession.timing.notice("Console ready after \(Double(tick + 1) / 2, privacy: .public) s")
 				return
@@ -597,21 +622,5 @@ final class AppModel {
 			try? await Task.sleep(for: .milliseconds(250))
 			if Task.isCancelled { return }
 		}
-	}
-}
-
-private extension Data {
-	/// Bytes from a hex string, or nil if it isn't one.
-	init?(hex: String) {
-		guard hex.count % 2 == 0 else { return nil }
-		var bytes = [UInt8]()
-		var index = hex.startIndex
-		while index < hex.endIndex {
-			let next = hex.index(index, offsetBy: 2)
-			guard let byte = UInt8(hex[index..<next], radix: 16) else { return nil }
-			bytes.append(byte)
-			index = next
-		}
-		self.init(bytes)
 	}
 }

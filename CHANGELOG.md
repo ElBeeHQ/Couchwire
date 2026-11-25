@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.2.6: Game volume, and a steadier app
+
+*25 November 2026*
+
+Game sound gets its own volume and mute, you can cancel a connect while the PS5 is waking, and a set of under-the-hood fixes make the app steadier.
+
+### Added
+
+- **Game volume and mute.** A Sound button in the stream controls sets the game's volume on your Mac, separately from the Mac's own volume, and mutes it. **Control-Command-S** mutes and unmutes. The volume is remembered; mute lasts for the session, so the next one never starts silent by surprise. Your microphone isn't affected.
+- **Cancel while connecting.** The Connecting panel on your home network always has a Cancel button now, and while a console is waking from rest mode its card shows Cancel instead of a spinner.
+
+### Changed
+
+- **Quicker reconnects over the internet.** After a network change, Couchwire keeps asking your PS5 within the same PlayStation Network session instead of starting a new one each time, which saves several seconds.
+- **Clearer console cards.** The line under a console's name no longer repeats its status. It says what Play will do (wake it, for example) or which network it's on. With your consoles set up, the Nearby section shrinks to a quiet line until a new console turns up.
+- **One verdict on responsiveness.** The dot in the stream controls and the rating in the performance panel now use the same thresholds, so they never disagree.
+- **Console Settings shows which console** you're changing, at the top of the sheet.
+- **Better with VoiceOver.** The settings button on each console card and the close buttons on the stream's banners have proper names, and are easier to click.
+
+### Fixed
+
+- **Sound and haptics never wait.** The parts that play game sound and drive the controller's voice coils no longer wait on a lock, which removes a rare source of crackles.
+- **Less work per frame.** Each video frame is now copied once on its way to the decoder instead of three times, and the work Couchwire does on each frame before decoding takes about a seventh of the time it did.
+- **A crash when unplugging the controller.** Couchwire could close the controller's connection while a report from it was still being handled.
+- **Fewer details in the Mac's log.** Your console's name and network addresses are no longer written to the system log in plain text.
+- Smaller fixes for pairing and the video decoder that could leave a little memory behind or, rarely, misbehave.
+
 ## v0.2.5: A sharper picture after Wi-Fi hiccups
 
 *24 November 2026*

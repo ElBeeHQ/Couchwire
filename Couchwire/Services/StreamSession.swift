@@ -99,6 +99,25 @@ final class StreamSession {
 	private(set) var micOn = false
 	/// Set when the mic couldn't start (no permission, no input device).
 	private(set) var micProblem: String?
+	/// Game sound volume, 0...1. Kept for the next session.
+	var volume: Float = StreamSession.savedVolume {
+		didSet {
+			if !UserDefaults.standard.bool(forKey: "CouchwireDemo") {
+				UserDefaults.standard.set(volume, forKey: "gameVolume")
+			}
+			applyVolume()
+		}
+	}
+	/// Game sound off, for this session only, so the next one never starts silent by surprise.
+	var soundMuted = false {
+		didSet { applyVolume() }
+	}
+	private static var savedVolume: Float {
+		min(max(UserDefaults.standard.object(forKey: "gameVolume") as? Float ?? 1, 0), 1)
+	}
+	private func applyVolume() {
+		media.audio.volume = soundMuted ? 0 : volume
+	}
 	let console: RegisteredConsole
 	let displayLayer = AVSampleBufferDisplayLayer()
 	/// Fed by the stream view's display link so we can measure time-to-refresh.
@@ -152,6 +171,7 @@ final class StreamSession {
 		media.audio.minimumLatency = home ? 0.02 : 0.06
 		media.audio.maximumLatency = link == .internetMobile ? 0.25 : 0.15
 		media.audio.fastRecovery = home
+		applyVolume()
 
 		var cfg = CWSessionConfig()
 		// Kept until cw_session_create returns; libchiaki copies what it needs.

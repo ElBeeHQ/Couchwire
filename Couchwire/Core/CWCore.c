@@ -644,8 +644,8 @@ static ChiakiErrorCode psn_ask_console(CWSession *s)
 	// That can't quite close the gap: libchiaki checks for a cancel just before it logs the answer,
 	// so a cancel landing in those few microseconds is caught after it, with the lock held. That's
 	// spotted below (our cancel, and an answer seen) and the PSN session is given up.
-	uint32_t level_mask = s->log.level_mask;
-	s->log.level_mask |= CHIAKI_LOG_VERBOSE;
+	// libchiaki's threads read the mask while this runs, so it's changed atomically.
+	uint32_t level_mask = __atomic_fetch_or(&s->log.level_mask, CHIAKI_LOG_VERBOSE, __ATOMIC_RELAXED);
 	atomic_store(&s->psn_reask, &r);
 	pthread_t thread;
 	bool watching = pthread_create(&thread, NULL, psn_reask_thread_func, &r) == 0;
@@ -708,7 +708,7 @@ static ChiakiErrorCode psn_ask_console(CWSession *s)
 	if(watching)
 		pthread_join(thread, NULL);
 	atomic_store(&s->psn_reask, NULL);
-	s->log.level_mask = level_mask;
+	__atomic_store_n(&s->log.level_mask, level_mask, __ATOMIC_RELAXED);
 	pthread_mutex_destroy(&r.mutex);
 	return err;
 }
@@ -950,8 +950,9 @@ static void shield_step(CWSession *s, Shield *sh, uint64_t received, uint64_t lo
 	else if(passing && now - sh->last_loss_ms > 5000)
 		passing = false;
 	atomic_store(&s->shield_passing, passing);
-	// Aligned double, read by libchiaki's congestion thread each report; a plain write is fine.
-	cc->packet_loss_max = passing ? cap : 0;
+	// Read by libchiaki's congestion thread each report, so it's written atomically.
+	double loss_max = passing ? cap : 0;
+	__atomic_store(&cc->packet_loss_max, &loss_max, __ATOMIC_RELAXED);
 }
 
 /// Every 50 ms, peeks at the counts for libchiaki's next congestion report.
@@ -1022,8 +1023,8 @@ void cw_session_watch_console_bitrate(CWSession *s)
 {
 	if(!s)
 		return;
-	// libchiaki's threads read the mask without a lock; an int write is fine for that.
-	s->log.level_mask |= CHIAKI_LOG_VERBOSE;
+	// libchiaki's threads read the mask without a lock, so it's changed atomically.
+	__atomic_fetch_or(&s->log.level_mask, CHIAKI_LOG_VERBOSE, __ATOMIC_RELAXED);
 }
 
 CWControllerState cw_controller_idle(void)

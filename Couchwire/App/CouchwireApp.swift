@@ -1,6 +1,22 @@
 import SwiftUI
 
 @main
+enum Launcher {
+	static func main() {
+		// Hosting the unit tests: start nothing (no consoles, discovery, updates or windows).
+		if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+			TestHostApp.main()
+		} else {
+			CouchwireApp.main()
+		}
+	}
+}
+
+/// The app as the CouchwireTests host: just enough for XCTest to run in.
+private struct TestHostApp: App {
+	var body: some Scene { Settings { EmptyView() } }
+}
+
 struct CouchwireApp: App {
 	@State private var model: AppModel
 	@AppStorage("showStats") private var showStats = false
@@ -50,6 +66,11 @@ struct CouchwireApp: App {
 				}
 				.keyboardShortcut("m", modifiers: [.command, .control])
 				.disabled(model.session?.phase != .streaming)
+				Button(model.session?.soundMuted == true ? "Unmute Game Sound" : "Mute Game Sound") {
+					model.session?.soundMuted.toggle()
+				}
+				.keyboardShortcut("s", modifiers: [.command, .control])
+				.disabled(model.session == nil)
 			}
 			CommandGroup(after: .windowArrangement) {
 				Button("End Session") { model.endSession() }

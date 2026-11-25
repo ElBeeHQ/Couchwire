@@ -98,13 +98,7 @@ struct StatsOverlay: View {
 		}
 	}
 
-	private var rating: (label: String, color: Color) {
-		switch stats.observedMs {
-		case ..<20: ("Excellent", .green)
-		case ..<35: ("Good", .yellow)
-		default: ("Noticeable", .orange)
-		}
-	}
+	private var rating: LatencyRating { LatencyRating(ms: stats.observedMs) }
 
 	// MARK: Where the time goes
 
@@ -240,5 +234,38 @@ private struct FramePacingGraph: View {
 			ctx.stroke(decode, with: .color(.cyan), lineWidth: 1)
 		}
 		.background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 6))
+	}
+}
+
+/// How button-to-screen time feels, shared by the stats panel and the stream controls' dot so
+/// they never disagree.
+enum LatencyRating: Equatable {
+	case measuring, excellent, good, noticeable
+
+	init(ms: Double) {
+		switch ms {
+		case ...0: self = .measuring
+		case ..<20: self = .excellent
+		case ..<35: self = .good
+		default: self = .noticeable
+		}
+	}
+
+	var label: String {
+		switch self {
+		case .measuring: "Measuring"
+		case .excellent: "Excellent"
+		case .good: "Good"
+		case .noticeable: "Noticeable"
+		}
+	}
+
+	var color: Color {
+		switch self {
+		case .measuring: .gray
+		case .excellent: .green
+		case .good: .yellow
+		case .noticeable: .orange
+		}
 	}
 }
